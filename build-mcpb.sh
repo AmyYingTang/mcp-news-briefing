@@ -1,19 +1,19 @@
 #!/bin/bash
-# Build and package briefing-mcp as a .mcpb Desktop Extension
+# Build and package mcp-news-briefing as a .mcpb Desktop Extension
 #
 # Usage: ./build-mcpb.sh
-# Output: briefing-mcp.mcpb (ready to install in Claude Desktop)
+# Output: mcp-news-briefing.mcpb (ready to install in Claude Desktop)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "📦 Building briefing-mcp Desktop Extension..."
+echo "📦 Building mcp-news-briefing Desktop Extension..."
 
 # 1. Clean previous build
 echo "  🧹 Cleaning..."
-rm -rf dist/ bundle/ briefing-mcp.mcpb
+rm -rf dist/ bundle/ mcp-news-briefing.mcpb
 
 # 2. Install all deps (need tsc to compile)
 echo "  📥 Installing dependencies..."
@@ -46,7 +46,7 @@ cp -r node_modules bundle/
 echo "  🗜️  Packing .mcpb..."
 cd bundle
 # Exclude unnecessary files to reduce size
-zip -r ../briefing-mcp.mcpb . \
+zip -r ../mcp-news-briefing.mcpb . \
   -x "*.ts" "*.map" "*.d.ts" "*.d.ts.map" \
   -x "*/test/*" "*/tests/*" "*/__tests__/*" "*/spec/*" \
   -x "*/.eslintrc" "*/.eslintrc.*" \
@@ -65,11 +65,11 @@ rm -rf bundle/
 # 8. Restore dev deps for development
 npm install --ignore-scripts 2>/dev/null
 
-SIZE=$(du -h briefing-mcp.mcpb | cut -f1)
+SIZE=$(du -h mcp-news-briefing.mcpb | cut -f1)
 echo ""
-echo "✅ Done! briefing-mcp.mcpb ($SIZE)"
+echo "✅ Done! mcp-news-briefing.mcpb ($SIZE)"
 echo ""
 echo "To install:"
 echo "  1. Open Claude Desktop"
 echo "  2. Settings → Extensions → Install Extension"
-echo "  3. Select briefing-mcp.mcpb"
+echo "  3. Select mcp-news-briefing.mcpb"
