@@ -1,0 +1,34 @@
+# Source files (only dist/ is needed)
+src/
+tsconfig.json
+build-mcpb.sh
+.git/
+.gitignore
+
+# Dev artifacts
+*.ts
+*.map
+*.d.ts
+
+# Test files in node_modules
+**/test/
+**/tests/
+**/__tests__/
+**/spec/
+**/.eslintrc
+**/.nycrc
+**/CHANGELOG*
+**/HISTORY*
+**/CHANGES*
+**/.github/
+**/example/
+**/examples/
+**/benchmark/
+**/benchmarks/
+**/coverage/
+**/.travis.yml
+**/.editorconfig
+**/Makefile
+**/Gruntfile*
+**/Gulpfile*
+**/.nyc_output/

@@ -1,0 +1,91 @@
+{
+  "manifest_version": "0.3",
+  "name": "briefing-mcp",
+  "display_name": "AI Briefing",
+  "version": "0.1.0",
+  "description": "Personalized AI & tech news filtering — say 'what's worth reading today?' and get a curated briefing from RSS, Reddit, and Hacker News based on your interest profile.",
+  "author": {
+    "name": "Amy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourname/briefing-mcp.git"
+  },
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/server.js"]
+    }
+  },
+  "tools": [
+    {
+      "name": "briefing_register",
+      "description": "Register and get a token for personalized briefings"
+    },
+    {
+      "name": "briefing_create_profile_interactive",
+      "description": "Guided questionnaire to set up your interest profile"
+    },
+    {
+      "name": "briefing_set_profile",
+      "description": "Set or update your interest profile"
+    },
+    {
+      "name": "briefing_get_profile",
+      "description": "View your current interest profile"
+    },
+    {
+      "name": "briefing_suggest_sources",
+      "description": "Get source recommendations based on your profile"
+    },
+    {
+      "name": "briefing_set_sources",
+      "description": "Subscribe to recommended source categories"
+    },
+    {
+      "name": "briefing_add_sources",
+      "description": "Add custom RSS feeds, Reddit subs, or HN keywords"
+    },
+    {
+      "name": "briefing_get_sources",
+      "description": "View your current source subscriptions"
+    },
+    {
+      "name": "briefing_fetch_articles",
+      "description": "Fetch latest articles from your subscribed sources"
+    },
+    {
+      "name": "briefing_get_articles",
+      "description": "Get saved articles for filtering and analysis"
+    },
+    {
+      "name": "briefing_log_interaction",
+      "description": "Track reading, discussion, and bookmarking behavior"
+    },
+    {
+      "name": "briefing_interaction_summary",
+      "description": "View your interest patterns and reading trends"
+    },
+    {
+      "name": "briefing_view_log",
+      "description": "View raw interaction log entries"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "getting-started",
+      "description": "First time? Register, set up profile, choose sources — 3 minutes"
+    },
+    {
+      "name": "setup-profile",
+      "description": "Adjust or rebuild your interest profile"
+    },
+    {
+      "name": "daily-briefing",
+      "description": "Read today's personalized briefing"
+    }
+  ]
+}
