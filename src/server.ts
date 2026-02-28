@@ -69,14 +69,14 @@ const server = new McpServer({
 
 server.tool(
   "briefing_register",
-  "注册新闻简报服务。用户说"帮我注册"、"我想开始用简报"等时调用。\n返回一个token，后续可以用token或用户名识别身份。",
+  "注册新闻简报服务。用户说「帮我注册」「我想开始用简报」等时调用。\n返回一个token，后续可以用token或用户名识别身份。",
   { name: z.string().default("").describe("用户名称（可选）") },
   async ({ name }) => {
     const result = registerUser(name);
 
     const message = result.is_new
       ? `🎉 注册成功！\n\n**用户名：** ${result.name}\n**Token：** ${result.token}\n\n⚠️ 请保存此token，后续也可以用名字来识别。\n\n下一步：可以设置你的兴趣偏好，让简报更精准。`
-      : `用户 ${result.name} 已存在，无需重复注册。\nToken：${result.token}\n\n可以直接说"看看今天的新闻"开始使用。`;
+      : `用户 ${result.name} 已存在，无需重复注册。\nToken：${result.token}\n\n可以直接说「看看今天的新闻」开始使用。`;
 
     return {
       content: [
@@ -93,7 +93,7 @@ server.tool(
 
 server.tool(
   "briefing_set_profile",
-  "设置或更新用户的兴趣偏好。用户说"我想关注XX"、"帮我加个兴趣"、"不想再看XX"等时调用。\n只传需要更新的字段，其他保持不变。兴趣偏好是新闻过滤的核心依据。",
+  "设置或更新用户的兴趣偏好。用户说「我想关注XX」「帮我加个兴趣」「不想再看XX」等时调用。\n只传需要更新的字段，其他保持不变。兴趣偏好是新闻过滤的核心依据。",
   {
     token: z.string().describe("用户token或用户名"),
     profile: z
@@ -122,7 +122,7 @@ server.tool(
 
 server.tool(
   "briefing_create_profile_interactive",
-  "通过问答了解用户的兴趣偏好。用户说"帮我设置偏好"、"重新设置我关注的内容"等时调用。\n返回引导问题，收集完毕后整理成JSON调用 briefing_set_profile 提交。",
+  "通过问答了解用户的兴趣偏好。用户说「帮我设置偏好」「重新设置我关注的内容」等时调用。\n返回引导问题，收集完毕后整理成JSON调用 briefing_set_profile 提交。",
   { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error } = requireToken(token);
@@ -138,7 +138,7 @@ server.tool(
 
 server.tool(
   "briefing_suggest_sources",
-  "根据用户的兴趣偏好推荐新闻来源（RSS、Reddit、Hacker News）。\n用户说"帮我推荐信源"、"有什么好的订阅推荐"等时调用。",
+  "根据用户的兴趣偏好推荐新闻来源（RSS、Reddit、Hacker News）。\n用户说「帮我推荐信源」「有什么好的订阅推荐」等时调用。",
   { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
@@ -193,10 +193,10 @@ server.tool(
 
 server.tool(
   "briefing_add_sources",
-  "添加自定义新闻来源（追加，不会覆盖已有的）。\n用户说"帮我加一个RSS"、"我还想看XX的Reddit"等时调用。",
+  "添加自定义新闻来源（追加，不会覆盖已有的）。\n用户说「帮我加一个RSS」「我还想看XX的Reddit」等时调用。",
   {
     token: z.string().describe("用户token或用户名"),
-    rss: z.record(z.string()).optional().describe('自定义RSS源，格式 {"名称": "URL"}，如 {"my-blog": "https://example.com/feed.xml"}'),
+    rss: z.record(z.string()).optional().describe('自定义RSS源，格式 {"名称": "URL"}'),
     reddit: z.array(z.string()).optional().describe('Reddit板块名称列表，如 ["python", "golang"]'),
     hn_keywords: z.array(z.string()).optional().describe('Hacker News过滤关键词，如 ["kubernetes", "docker"]'),
   },
@@ -215,7 +215,7 @@ server.tool(
 
 server.tool(
   "briefing_get_sources",
-  "查看当前订阅了哪些新闻来源。用户说"我现在订阅了什么"、"看看我的信源"等时调用。",
+  "查看当前订阅了哪些新闻来源。用户说「我现在订阅了什么」「看看我的信源」等时调用。",
   { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
@@ -232,7 +232,7 @@ server.tool(
 
 server.tool(
   "briefing_fetch_articles",
-  "从订阅的新闻来源抓取最新内容。用户说"看看今天的新闻"、"最近有什么值得看的"、"这周的简报"等时，先调用此工具获取数据。\n\n时间范围：24=今天，168=本周，720=本月。",
+  "从订阅的新闻来源抓取最新内容。用户说「看看今天的新闻」「最近有什么值得看的」「这周的简报」等时，先调用此工具获取数据。\n\n时间范围：24=今天，168=本周，720=本月。",
   {
     token: z.string().describe("用户token或用户名"),
     hours_back: z
@@ -344,7 +344,7 @@ server.tool(
               "对于🔴高度匹配中的重大行业消息（如产品发布、重大更新、公司重要公告等），" +
               "请使用web search查证以下信息并附在该条目中：\n" +
               "1. 官方一手来源链接（官网公告、官方博客等）\n" +
-              "2. 实际发布/发生日期（注意区分'事件发生日期'和'被讨论日期'，" +
+              "2. 实际发布/发生日期（注意区分事件发生日期和被讨论日期，" +
               "   RSS/Reddit抓到的可能是后者）\n" +
               "3. 如果查证发现信息不准确或有出入，明确标注\n" +
               "对于🟡中等匹配和⚪低优先级的条目，附上文章原始链接即可，不需要额外查证。\n" +
@@ -363,10 +363,10 @@ server.tool(
   "记录用户的阅读行为。当用户展开某条新闻、深入讨论、或收藏时，自动调用。\n用于后续分析用户的兴趣趋势。",
   {
     token: z.string().describe("用户token或用户名"),
-    action: z.string().describe("行为类型：'read_detail'=展开阅读，'discussed'=深入讨论，'saved'=收藏，'feedback'=反馈"),
+    action: z.string().describe("行为类型：read_detail=展开阅读，discussed=深入讨论，saved=收藏，feedback=反馈"),
     article_title: z.string().default("").describe("相关文章标题"),
     article_url: z.string().default("").describe("相关文章链接"),
-    topics: z.array(z.string()).default([]).describe("相关话题标签，如['MCP', 'Edge AI']"),
+    topics: z.array(z.string()).default([]).describe("相关话题标签"),
     notes: z.string().default("").describe("备注"),
   },
   async ({ token, action, article_title, article_url, topics, notes }) => {
@@ -384,7 +384,7 @@ server.tool(
 
 server.tool(
   "briefing_interaction_summary",
-  "分析用户最近的阅读兴趣趋势。用户说"我最近关注了什么"、"这周看了些啥"等时调用。",
+  "分析用户最近的阅读兴趣趋势。用户说「我最近关注了什么」「这周看了些啥」等时调用。",
   {
     token: z.string().describe("用户token或用户名"),
     days: z.number().int().min(1).max(90).default(7).describe("回顾天数（默认7天）"),
@@ -478,7 +478,7 @@ server.prompt("daily-briefing", "看看今天有什么值得关注的", async ()
         text: "看看今天有什么值得关注的新闻。",
       },
     },
-  },
+  ],
 }));
 
 // ── Start ────────────────────────────────────────────────────
