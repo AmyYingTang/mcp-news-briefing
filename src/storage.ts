@@ -28,7 +28,7 @@ function getDataDir(): string {
   } else {
     base = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   }
-  const dir = join(base, "briefing-mcp");
+  const dir = join(base, "mcp-news-briefing");
   mkdirSync(dir, { recursive: true });
   return dir;
 }

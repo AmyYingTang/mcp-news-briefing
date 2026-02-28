@@ -1,6 +1,6 @@
 {
   "manifest_version": "0.3",
-  "name": "briefing-mcp",
+  "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
   "version": "0.1.0",
   "description": "Personalized AI & tech news filtering — say 'what's worth reading today?' and get a curated briefing from RSS, Reddit, and Hacker News based on your interest profile.",
@@ -27,19 +27,19 @@
     },
     {
       "name": "briefing_create_profile_interactive",
-      "description": "Guided questionnaire to set up your interest profile"
+      "description": "Guided Q&A to set up your interests and filters"
     },
     {
       "name": "briefing_set_profile",
-      "description": "Set or update your interest profile"
+      "description": "Update what you want to see and what to filter out"
     },
     {
       "name": "briefing_get_profile",
-      "description": "View your current interest profile"
+      "description": "View your current interest preferences"
     },
     {
       "name": "briefing_suggest_sources",
-      "description": "Get source recommendations based on your profile"
+      "description": "Get source recommendations based on your interests"
     },
     {
       "name": "briefing_set_sources",
@@ -51,11 +51,11 @@
     },
     {
       "name": "briefing_get_sources",
-      "description": "View your current source subscriptions"
+      "description": "View your current subscriptions"
     },
     {
       "name": "briefing_fetch_articles",
-      "description": "Fetch latest articles from your subscribed sources"
+      "description": "Fetch latest news from your subscribed sources"
     },
     {
       "name": "briefing_get_articles",
@@ -67,25 +67,28 @@
     },
     {
       "name": "briefing_interaction_summary",
-      "description": "View your interest patterns and reading trends"
+      "description": "See your reading trends and interest patterns"
     },
     {
       "name": "briefing_view_log",
-      "description": "View raw interaction log entries"
+      "description": "View recent reading history"
     }
   ],
   "prompts": [
     {
       "name": "getting-started",
-      "description": "First time? Register, set up profile, choose sources — 3 minutes"
+      "description": "First time? Register, set up interests, choose sources — 3 minutes",
+      "text": "我想开始用新闻简报功能"
     },
     {
       "name": "setup-profile",
-      "description": "Adjust or rebuild your interest profile"
+      "description": "Set up or change what news you want to see",
+      "text": "我想重新设置我关注的内容"
     },
     {
       "name": "daily-briefing",
-      "description": "Read today's personalized briefing"
+      "description": "See what's worth reading today",
+      "text": "看看今天有什么值得关注的新闻"
     }
   ]
 }

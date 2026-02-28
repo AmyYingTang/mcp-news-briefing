@@ -1,11 +1,11 @@
 {
-  "name": "briefing-mcp",
+  "name": "mcp-news-briefing",
   "version": "0.1.0",
   "description": "AI Briefing - Personalized tech news via MCP",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
-    "briefing-mcp": "dist/server.js"
+    "mcp-news-briefing": "dist/server.js"
   },
   "scripts": {
     "build": "tsc",

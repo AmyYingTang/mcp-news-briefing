@@ -1,14 +1,11 @@
 /**
- * User profile — the core of content filtering
- *
- * Profile fields drive how Claude evaluates each article's relevance.
- * Also contains the questionnaire and source catalog for recommendations.
+ * Profile management — user interest preferences, questionnaire, source recommendations
  */
 
 import { join } from "node:path";
 import { getUserDataDir, readJSON, writeJSON } from "./storage.js";
 
-// ── Types ────────────────────────────────────────────────────
+// ── Types ───────────────────────────────────────────────────
 
 export interface UserProfile {
   name: string;
@@ -19,213 +16,207 @@ export interface UserProfile {
   noise_filter: string[];
 }
 
-export interface SourceCategory {
-  keywords: string[];
-  label: string;
-  rss: Record<string, string>;
-  reddit: string[];
-  hn_keywords: string[];
-}
-
-// ── Default profile template ─────────────────────────────────
-
 const DEFAULT_PROFILE: UserProfile = {
   name: "",
   strengths: [],
   active_projects: [],
-  high_interest: [
-    "AI Agent 落地实施和框架选型",
-    "AI工具链在实际工程中的应用",
-  ],
-  exploration_interest: [
-    "开源模型发展趋势",
-    "新的编程工具和开发者体验",
-  ],
-  noise_filter: [
-    "模型benchmark排名竞赛",
-    "AI公司融资和估值新闻",
-    "AI末日论或过度乐观的炒作",
-  ],
+  high_interest: [],
+  exploration_interest: [],
+  noise_filter: [],
 };
+
+// ── CRUD ────────────────────────────────────────────────────
+
+export function getProfile(token: string): UserProfile {
+  const dir = getUserDataDir(token);
+  return readJSON<UserProfile>(join(dir, "profile.json"), { ...DEFAULT_PROFILE });
+}
+
+export function setProfile(token: string, partial: Partial<UserProfile>): UserProfile {
+  const current = getProfile(token);
+  const updated = { ...current, ...partial };
+  const dir = getUserDataDir(token);
+  writeJSON(join(dir, "profile.json"), updated);
+  return updated;
+}
 
 // ── Profile questionnaire ────────────────────────────────────
 
 export const PROFILE_QUESTIONNAIRE = {
   instructions:
-    "请根据以下问题与用户对话，收集信息后整理成画像JSON，" +
+    "请根据以下问题与用户对话，收集信息后整理成兴趣偏好JSON，" +
     "调用 briefing_set_profile 提交。\n" +
     "不需要逐字逐条问，自然对话即可，根据用户回答灵活追问。\n" +
     "用户可以跳过任何问题。",
   questions: [
     {
-      id: "role",
-      question: "你目前的职业/角色是什么？（如：软件工程师、产品经理、独立开发者、学生等）",
-      maps_to: "strengths",
-      required: false,
+      field: "name",
+      ask: "你想用什么名字？（方便辨识）",
     },
     {
-      id: "expertise",
-      question: "你的核心技术专长或优势是什么？（如：后端开发、系统架构、数据分析、硬件等）",
-      maps_to: "strengths",
-      required: false,
+      field: "strengths",
+      ask: "你的职业背景是什么？有哪些核心特长？\n比如：软件工程、嵌入式开发、数据分析、产品设计……",
+      examples: ["10年以上软件工程经验，擅长系统架构", "全栈开发，偏前端", "数据科学背景，关注MLOps"],
     },
     {
-      id: "projects",
-      question: "你目前在做什么项目或方向？（工作相关或个人项目都算）",
-      maps_to: "active_projects",
-      required: false,
+      field: "active_projects",
+      ask: "现在手上在做什么项目或者关注什么事情？\n可以是工作项目，也可以是个人的。",
+      examples: ["在做一个MCP Server项目", "ESP32物联网传感器", "准备一个技术博客"],
     },
     {
-      id: "high_interest",
-      question: "你日常最关注哪些技术领域？希望每天都看到相关动态的那种。",
-      maps_to: "high_interest",
-      required: true,
-      examples: "如：MCP生态、AI Agent、ESP32/嵌入式、本地模型部署、前端开发等",
+      field: "high_interest",
+      ask: "你最关注哪些领域的消息？这些是你每天都想看到的。\n不限于技术——天文、金融、健康，都可以。",
+      examples: ["MCP协议和工具生态", "嵌入式AI/TinyML", "Anthropic和Claude的更新", "天文观测"],
     },
     {
-      id: "exploration",
-      question: "有没有一些你想探索但不需要天天看的领域？每周看几条就够了。",
-      maps_to: "exploration_interest",
-      required: false,
-      examples: "如：量子计算、生物信息、游戏开发、航天科技等",
+      field: "exploration_interest",
+      ask: "有没有一些你想了解但不是核心关注的领域？\n这些内容每周看到几条就够了。",
+      examples: ["量子计算进展", "Rust语言生态", "太空探索", "独立游戏开发"],
     },
     {
-      id: "noise",
-      question: "有没有你明确不想看到的内容类型？",
-      maps_to: "noise_filter",
-      required: false,
-      examples: "如：融资新闻、benchmark排名、营销PR、加密货币等",
-    },
-    {
-      id: "name",
-      question: "最后，简报里怎么称呼你？",
-      maps_to: "name",
-      required: false,
+      field: "noise_filter",
+      ask: "有什么内容你明确不想看到的？\n直接过滤掉，不出现在简报里。",
+      examples: ["纯融资/估值新闻", "加密货币炒作", "大厂裁员八卦", "标题党内容"],
     },
   ],
-  completion_hint:
-    "收集完信息后，将回答整理为以下JSON格式并调用 briefing_set_profile：\n" +
-    '{\n  "name": "用户名",\n  "strengths": ["特质1", "特质2"],\n' +
-    '  "active_projects": ["项目1", "项目2"],\n' +
-    '  "high_interest": ["领域1", "领域2"],\n' +
-    '  "exploration_interest": ["领域1"],\n' +
-    '  "noise_filter": ["不想看的1", "不想看的2"]\n}\n' +
-    "然后建议用户调用 briefing_suggest_sources 获取信源推荐。",
 };
 
-// ── Source catalog ────────────────────────────────────────────
+// ── Source catalog ───────────────────────────────────────────
 
-export const SOURCE_CATALOG: Record<string, SourceCategory> = {
+interface SourceCategory {
+  label: string;
+  keywords: string[];
+  rss: Record<string, string>;
+  reddit: string[];
+  hn_keywords: string[];
+}
+
+const SOURCE_CATALOG: Record<string, SourceCategory> = {
+  anthropic: {
+    label: "Anthropic / Claude",
+    keywords: ["anthropic", "claude", "mcp", "model context protocol"],
+    rss: {
+      "anthropic-blog": "https://www.anthropic.com/blog/rss.xml",
+      "anthropic-news": "https://www.anthropic.com/news/rss.xml",
+      "anthropic-research": "https://www.anthropic.com/research/rss.xml",
+    },
+    reddit: ["ClaudeAI", "AnthropicAI"],
+    hn_keywords: ["anthropic", "claude", "mcp"],
+  },
   ai_general: {
-    keywords: ["ai", "人工智能", "machine learning", "深度学习", "llm", "大模型", "大语言模型"],
-    label: "AI/机器学习 综合",
+    label: "AI General / LLM",
+    keywords: ["ai", "llm", "gpt", "openai", "gemini", "machine learning", "deep learning", "transformer"],
     rss: {
       "openai-blog": "https://openai.com/blog/rss.xml",
-      "google-ai-blog": "https://blog.google/technology/ai/rss/",
-      "huggingface-blog": "https://huggingface.co/blog/feed.xml",
+      "deepmind-blog": "https://deepmind.google/blog/rss.xml",
+      "hf-blog": "https://huggingface.co/blog/feed.xml",
     },
-    reddit: ["MachineLearning", "LocalLLaMA"],
-    hn_keywords: ["ai", "llm", "gpt", "machine learning", "deep learning", "neural", "transformer"],
+    reddit: ["MachineLearning", "LocalLLaMA", "artificial"],
+    hn_keywords: ["llm", "gpt", "openai", "gemini", "transformer", "machine learning"],
   },
-  anthropic: {
-    keywords: ["claude", "anthropic", "mcp", "model context protocol", "claude code"],
-    label: "Anthropic/Claude 生态",
-    rss: { "anthropic-blog": "https://www.anthropic.com/rss.xml" },
-    reddit: ["ClaudeAI"],
-    hn_keywords: ["claude", "anthropic", "mcp"],
-  },
-  ai_agent: {
-    keywords: ["agent", "ai agent", "agentic", "langchain", "langgraph", "autogen", "crew"],
-    label: "AI Agent 框架与落地",
-    rss: {},
+  ai_agents: {
+    label: "AI Agents / Tooling",
+    keywords: ["agent", "tool use", "function calling", "agentic", "langchain", "autogen", "crew"],
+    rss: {
+      "langchain-blog": "https://blog.langchain.dev/rss/",
+    },
     reddit: ["LangChain"],
-    hn_keywords: ["agent", "agentic", "langchain"],
+    hn_keywords: ["ai agent", "function calling", "langchain", "autogen"],
   },
   embedded: {
-    keywords: ["esp32", "嵌入式", "iot", "物联网", "tinyml", "edge ai", "arduino", "raspberry pi"],
-    label: "嵌入式/IoT/Edge AI",
+    label: "Embedded / IoT / Edge AI",
+    keywords: ["embedded", "esp32", "arduino", "iot", "edge ai", "tinyml", "raspberry pi", "microcontroller"],
     rss: {
-      hackaday: "https://hackaday.com/feed/",
-      adafruit: "https://blog.adafruit.com/feed/",
+      "hackaday": "https://hackaday.com/feed/",
+      "adafruit": "https://blog.adafruit.com/feed/",
     },
-    reddit: ["esp32", "IOT", "arduino"],
-    hn_keywords: ["esp32", "iot", "edge", "tinyml", "embedded"],
+    reddit: ["esp32", "embedded", "arduino", "IOT"],
+    hn_keywords: ["esp32", "embedded", "tinyml", "edge ai", "raspberry pi"],
   },
-  open_source_models: {
-    keywords: ["开源模型", "open source model", "llama", "mistral", "qwen", "本地部署", "local model"],
-    label: "开源模型与本地部署",
-    rss: {},
-    reddit: ["LocalLLaMA"],
-    hn_keywords: ["llama", "mistral", "qwen", "open source", "local"],
-  },
-  devtools: {
-    keywords: ["开发工具", "devtools", "ide", "编辑器", "terminal", "cli", "vscode", "cursor", "编程"],
-    label: "开发者工具与体验",
-    rss: { "simon-willison": "https://simonwillison.net/atom/everything/" },
-    reddit: [],
-    hn_keywords: ["developer", "programming", "coding", "ide"],
-  },
-  astronomy: {
-    keywords: ["天文", "astronomy", "航天", "太空", "space", "望远镜", "telescope", "nasa"],
-    label: "天文与航天",
+  dev_tools: {
+    label: "Developer Tools / DevOps",
+    keywords: ["devops", "kubernetes", "docker", "ci/cd", "github", "vscode", "developer tools", "infrastructure"],
     rss: {
-      "nasa-breaking": "https://www.nasa.gov/rss/dyn/breaking_news.rss",
-      spacenews: "https://spacenews.com/feed/",
+      "github-blog": "https://github.blog/feed/",
     },
-    reddit: ["astronomy", "astrophotography", "space"],
-    hn_keywords: ["space", "nasa", "telescope", "astronomy"],
-  },
-  crypto: {
-    keywords: ["btc", "bitcoin", "比特币", "crypto", "加密货币", "区块链", "blockchain", "web3"],
-    label: "Bitcoin/加密货币",
-    rss: {},
-    reddit: ["Bitcoin", "CryptoCurrency"],
-    hn_keywords: ["bitcoin", "crypto", "blockchain"],
+    reddit: ["devops", "kubernetes", "docker"],
+    hn_keywords: ["kubernetes", "docker", "github", "devops"],
   },
   security: {
-    keywords: ["安全", "security", "网络安全", "cybersecurity", "漏洞", "exploit", "渗透"],
-    label: "网络安全",
+    label: "Security / Privacy",
+    keywords: ["security", "cybersecurity", "privacy", "vulnerability", "encryption", "zero trust"],
     rss: {
-      schneier: "https://www.schneier.com/feed/atom/",
-      krebs: "https://krebsonsecurity.com/feed/",
+      "krebs": "https://krebsonsecurity.com/feed/",
+      "schneier": "https://www.schneier.com/feed/atom/",
     },
-    reddit: ["netsec"],
-    hn_keywords: ["security", "vulnerability", "exploit", "hack"],
+    reddit: ["netsec", "cybersecurity"],
+    hn_keywords: ["security", "vulnerability", "encryption", "zero-day"],
   },
-  rust: {
-    keywords: ["rust", "rust语言", "cargo", "tokio"],
-    label: "Rust 编程",
-    rss: { "rust-blog": "https://blog.rust-lang.org/feed.xml" },
-    reddit: ["rust"],
-    hn_keywords: ["rust", "cargo", "rustlang"],
+  web_dev: {
+    label: "Web Development",
+    keywords: ["react", "vue", "svelte", "nextjs", "typescript", "javascript", "frontend", "web dev", "css"],
+    rss: {
+      "css-tricks": "https://css-tricks.com/feed/",
+    },
+    reddit: ["reactjs", "webdev", "typescript", "javascript"],
+    hn_keywords: ["react", "nextjs", "typescript", "frontend"],
   },
   python: {
-    keywords: ["python", "django", "flask", "fastapi"],
-    label: "Python 生态",
-    rss: { "python-insider": "https://blog.python.org/feeds/posts/default?alt=rss" },
-    reddit: ["Python"],
-    hn_keywords: ["python", "django", "fastapi"],
+    label: "Python Ecosystem",
+    keywords: ["python", "fastapi", "django", "flask", "pandas", "numpy", "pip", "poetry"],
+    rss: {
+      "real-python": "https://realpython.com/atom.xml",
+      "python-insider": "https://blog.python.org/feeds/posts/default",
+    },
+    reddit: ["Python", "learnpython"],
+    hn_keywords: ["python", "fastapi", "django"],
+  },
+  rust: {
+    label: "Rust Language",
+    keywords: ["rust", "cargo", "tokio", "wasm", "webassembly"],
+    rss: {
+      "rust-blog": "https://blog.rust-lang.org/feed.xml",
+      "this-week-in-rust": "https://this-week-in-rust.org/atom.xml",
+    },
+    reddit: ["rust"],
+    hn_keywords: ["rust", "cargo", "tokio"],
+  },
+  astronomy: {
+    label: "Astronomy / Space",
+    keywords: ["astronomy", "telescope", "space", "nasa", "astrophotography", "starlink", "rocket", "aerospace"],
+    rss: {
+      "nasa-breaking": "https://www.nasa.gov/news-release/feed/",
+      "space-com": "https://www.space.com/feeds/all",
+    },
+    reddit: ["astrophotography", "astronomy", "space", "spacex"],
+    hn_keywords: ["nasa", "spacex", "telescope", "astronomy"],
+  },
+  science: {
+    label: "Science General",
+    keywords: ["science", "physics", "biology", "chemistry", "research", "nature", "paper"],
+    rss: {
+      "nature-news": "https://www.nature.com/nature.rss",
+      "arxiv-cs-ai": "https://rss.arxiv.org/rss/cs.AI",
+    },
+    reddit: ["science", "Physics"],
+    hn_keywords: ["research", "paper", "arxiv"],
+  },
+  startup: {
+    label: "Startups / Tech Business",
+    keywords: ["startup", "venture", "funding", "ipo", "acquisition", "y combinator", "product launch"],
+    rss: {
+      "techcrunch": "https://techcrunch.com/feed/",
+    },
+    reddit: ["startups", "Entrepreneur"],
+    hn_keywords: ["yc", "startup", "launch"],
   },
 };
 
-// ── Profile CRUD ─────────────────────────────────────────────
-
-export function getProfile(token: string): UserProfile {
-  const path = join(getUserDataDir(token), "profile.json");
-  return readJSON<UserProfile>(path, { ...DEFAULT_PROFILE });
-}
-
-export function setProfile(token: string, partial: Partial<UserProfile>): UserProfile {
-  const existing = getProfile(token);
-  const updated = { ...existing, ...partial };
-  const path = join(getUserDataDir(token), "profile.json");
-  writeJSON(path, updated);
-  return updated;
-}
+// ── Profile prompt generation ────────────────────────────────
 
 export function getProfilePrompt(token: string): string {
   const p = getProfile(token);
-  const sections: string[] = [`## 用户画像：${p.name || "未命名"}`];
+  const sections: string[] = [`## 用户兴趣偏好：${p.name || "未命名"}`];
 
   if (p.strengths.length) {
     sections.push("### 核心特质", p.strengths.map((s) => `- ${s}`).join("\n"));
@@ -281,7 +272,7 @@ export function suggestSources(token: string) {
   return {
     matched_categories: sorted,
     instructions:
-      "以上是根据画像匹配的信源分类。请向用户展示推荐结果，" +
+      "以上是根据用户兴趣偏好匹配的信源分类。请向用户展示推荐结果，" +
       "让用户确认想订阅哪些分类。\n" +
       "用户确认后，调用 briefing_set_sources 传入选定的分类ID列表。\n" +
       "用户也可以手动添加自定义RSS。",

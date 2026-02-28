@@ -6,8 +6,8 @@
  * Designed for zero-dependency installation via .mcpb Desktop Extension.
  *
  * Usage:
- *   npx briefing-mcp          # stdio mode (Claude Desktop)
- *   npx briefing-mcp --http   # HTTP mode (remote)
+ *   npx mcp-news-briefing          # stdio mode (Claude Desktop)
+ *   npx mcp-news-briefing --http   # HTTP mode (remote)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -29,7 +29,7 @@ function requireToken(token: string): { error?: string; realToken?: string } {
       error: JSON.stringify({
         status: "error",
         error: "missing_token",
-        message: "需要提供token或用户名。如果还没有注册，请先调用 briefing_register。",
+        message: "需要提供token或用户名。如果还没有注册，请先用 briefing_register 注册。",
       }),
     };
   }
@@ -40,7 +40,7 @@ function requireToken(token: string): { error?: string; realToken?: string } {
       error: JSON.stringify({
         status: "error",
         error: "invalid_token",
-        message: "找不到匹配的用户。可以传入token或注册时的用户名。\n如果还没有注册，请先调用 briefing_register。",
+        message: "找不到匹配的用户。可以传入token或注册时的用户名。\n如果还没有注册，请先用 briefing_register 注册。",
       }),
     };
   }
@@ -61,7 +61,7 @@ function countSources(articles: Article[]): Record<string, number> {
 // ── Create MCP Server ────────────────────────────────────────
 
 const server = new McpServer({
-  name: "briefing-mcp",
+  name: "mcp-news-briefing",
   version: "0.1.0",
 });
 
@@ -69,14 +69,14 @@ const server = new McpServer({
 
 server.tool(
   "briefing_register",
-  "注册新用户并获取一个token。\n这个token用于所有后续操作,请妥善保存。",
-  { name: z.string().default("").describe("用户名称(可选,方便辨识)") },
+  "注册新闻简报服务。用户说"帮我注册"、"我想开始用简报"等时调用。\n返回一个token，后续可以用token或用户名识别身份。",
+  { name: z.string().default("").describe("用户名称（可选）") },
   async ({ name }) => {
     const result = registerUser(name);
 
     const message = result.is_new
-      ? `🎉 注册成功！\n\n**用户名：** ${result.name}\n**Token：** ${result.token}\n\n⚠️ 请保存此token。后续操作可以用token或用户名来识别身份。\n\n下一步：调用 briefing_create_profile_interactive 开始画像设置问卷。`
-      : `用户 ${result.name} 已存在，无需重复注册。\nToken：${result.token}\n\n可以直接开始使用，或调用 briefing_set_profile 更新画像。`;
+      ? `🎉 注册成功！\n\n**用户名：** ${result.name}\n**Token：** ${result.token}\n\n⚠️ 请保存此token，后续也可以用名字来识别。\n\n下一步：可以设置你的兴趣偏好，让简报更精准。`
+      : `用户 ${result.name} 已存在，无需重复注册。\nToken：${result.token}\n\n可以直接说"看看今天的新闻"开始使用。`;
 
     return {
       content: [
@@ -93,9 +93,9 @@ server.tool(
 
 server.tool(
   "briefing_set_profile",
-  "设置或更新用户画像。只需传入要更新的字段,未传入的保持不变。\n画像是信息过滤的核心——Claude会根据画像来评估每条内容的匹配度。",
+  "设置或更新用户的兴趣偏好。用户说"我想关注XX"、"帮我加个兴趣"、"不想再看XX"等时调用。\n只传需要更新的字段，其他保持不变。兴趣偏好是新闻过滤的核心依据。",
   {
-    token: z.string().describe("用户token"),
+    token: z.string().describe("用户token或用户名"),
     profile: z
       .object({
         name: z.string().optional(),
@@ -105,7 +105,7 @@ server.tool(
         exploration_interest: z.array(z.string()).optional(),
         noise_filter: z.array(z.string()).optional(),
       })
-      .describe("用户画像JSON,可包含以下字段(只传需要更新的):\n- name: 名称\n- strengths: 核心特质列表\n- active_projects: 当前项目列表\n- high_interest: 高度关注领域列表\n- exploration_interest: 探索性关注列表\n- noise_filter: 噪音过滤规则列表"),
+      .describe("兴趣偏好JSON，可包含：\n- name: 名称\n- strengths: 专业特长\n- active_projects: 当前在做的项目\n- high_interest: 重点关注的领域\n- exploration_interest: 想了解但不是核心的领域\n- noise_filter: 不想看到的内容类型"),
   },
   async ({ token, profile }) => {
     const { error, realToken } = requireToken(token);
@@ -113,7 +113,7 @@ server.tool(
 
     const updated = setProfile(realToken!, profile);
     return {
-      content: [{ type: "text" as const, text: JSON.stringify({ status: "success", profile: updated, message: "画像已更新。" }) }],
+      content: [{ type: "text" as const, text: JSON.stringify({ status: "success", profile: updated, message: "兴趣偏好已更新。" }) }],
     };
   }
 );
@@ -122,8 +122,8 @@ server.tool(
 
 server.tool(
   "briefing_create_profile_interactive",
-  "获取画像引导问卷。返回一系列问题供AI与用户对话收集信息。\n收集完成后,AI应将回答整理成画像JSON,调用 briefing_set_profile 提交。\n\n适用场景:新用户首次设置画像,或用户想重新设置画像时。",
-  { token: z.string().describe("用户token或注册时的用户名") },
+  "通过问答了解用户的兴趣偏好。用户说"帮我设置偏好"、"重新设置我关注的内容"等时调用。\n返回引导问题，收集完毕后整理成JSON调用 briefing_set_profile 提交。",
+  { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -138,8 +138,8 @@ server.tool(
 
 server.tool(
   "briefing_suggest_sources",
-  "根据用户画像推荐相关信源(RSS、Reddit、HN关键词)。\n返回匹配的信源分类列表,用户确认后调用 briefing_set_sources 订阅。",
-  { token: z.string().describe("用户token或注册时的用户名") },
+  "根据用户的兴趣偏好推荐新闻来源（RSS、Reddit、Hacker News）。\n用户说"帮我推荐信源"、"有什么好的订阅推荐"等时调用。",
+  { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -155,12 +155,12 @@ server.tool(
 
 server.tool(
   "briefing_set_sources",
-  "根据选择的分类ID设置用户的信源订阅。\n这会更新用户的RSS、Reddit、HN关键词配置。\n用户之前添加的自定义信源会保留。",
+  "按分类订阅新闻来源。用户确认推荐的信源后调用。\n已有的自定义信源会保留。",
   {
-    token: z.string().describe("用户token"),
+    token: z.string().describe("用户token或用户名"),
     category_ids: z
       .array(z.string())
-      .describe("选择的信源分类ID列表,如 ['anthropic', 'embedded', 'ai_general']。分类ID来自 briefing_suggest_sources 的返回结果。"),
+      .describe("信源分类ID列表，如 ['anthropic', 'embedded', 'ai_general']。来自 briefing_suggest_sources 的推荐结果。"),
   },
   async ({ token, category_ids }) => {
     const { error, realToken } = requireToken(token);
@@ -193,12 +193,12 @@ server.tool(
 
 server.tool(
   "briefing_add_sources",
-  "添加自定义信源(追加,不覆盖已有的)。\n可以添加自定义RSS、Reddit板块、HN关键词。",
+  "添加自定义新闻来源（追加，不会覆盖已有的）。\n用户说"帮我加一个RSS"、"我还想看XX的Reddit"等时调用。",
   {
-    token: z.string().describe("用户token"),
-    rss: z.record(z.string()).optional().describe('自定义RSS源,格式 {"名称": "URL"},如 {"my-blog": "https://example.com/feed.xml"}'),
-    reddit: z.array(z.string()).optional().describe('Reddit板块名称列表,如 ["python", "golang"]'),
-    hn_keywords: z.array(z.string()).optional().describe('HN过滤关键词列表,如 ["kubernetes", "docker"]'),
+    token: z.string().describe("用户token或用户名"),
+    rss: z.record(z.string()).optional().describe('自定义RSS源，格式 {"名称": "URL"}，如 {"my-blog": "https://example.com/feed.xml"}'),
+    reddit: z.array(z.string()).optional().describe('Reddit板块名称列表，如 ["python", "golang"]'),
+    hn_keywords: z.array(z.string()).optional().describe('Hacker News过滤关键词，如 ["kubernetes", "docker"]'),
   },
   async ({ token, rss, reddit, hn_keywords }) => {
     const { error, realToken } = requireToken(token);
@@ -215,8 +215,8 @@ server.tool(
 
 server.tool(
   "briefing_get_sources",
-  "查看用户当前的信源配置,包括订阅的分类和自定义信源。",
-  { token: z.string().describe("用户token或注册时的用户名") },
+  "查看当前订阅了哪些新闻来源。用户说"我现在订阅了什么"、"看看我的信源"等时调用。",
+  { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -232,16 +232,16 @@ server.tool(
 
 server.tool(
   "briefing_fetch_articles",
-  "从RSS、Reddit、Hacker News抓取最新的AI和技术相关文章。\n抓取的文章会保存在本地,供后续过滤和分析使用。\n每天首次查看简报时应先调用此工具获取最新数据。\n\n时间范围通过hours_back控制:24=今天,168=本周,720=本月。",
+  "从订阅的新闻来源抓取最新内容。用户说"看看今天的新闻"、"最近有什么值得看的"、"这周的简报"等时，先调用此工具获取数据。\n\n时间范围：24=今天，168=本周，720=本月。",
   {
-    token: z.string().describe("用户token或注册时的用户名"),
+    token: z.string().describe("用户token或用户名"),
     hours_back: z
       .number()
       .int()
       .min(1)
       .max(720)
       .default(24)
-      .describe("回溯多少小时的内容。常用值:\n- 24 = 今天(默认)\n- 48 = 最近两天\n- 168 = 本周\n- 720 = 本月"),
+      .describe("回溯小时数：24=今天（默认），48=最近两天，168=本周，720=本月"),
   },
   async ({ token, hours_back }) => {
     const { error, realToken } = requireToken(token);
@@ -266,7 +266,7 @@ server.tool(
             status: "success",
             total_articles: articles.length,
             sources_breakdown: countSources(articles),
-            message: `已获取${articles.length}条内容。请使用 briefing_get_articles 查看文章列表，然后根据用户画像进行过滤分析。`,
+            message: `已获取${articles.length}条内容。接下来获取文章列表，根据用户的兴趣偏好进行过滤。`,
           }),
         },
       ],
@@ -278,11 +278,11 @@ server.tool(
 
 server.tool(
   "briefing_get_articles",
-  "获取已抓取并保存在本地的文章列表。\n返回文章标题、来源、摘要等信息,供Claude根据用户画像进行过滤分析。",
+  "获取已抓取的文章列表。返回标题、来源、摘要等，供Claude根据用户的兴趣偏好筛选和分析。",
   {
-    token: z.string().describe("用户token或注册时的用户名"),
-    date: z.string().optional().describe("日期(YYYY-MM-DD格式),默认为今天"),
-    limit: z.number().int().min(1).max(200).default(8).describe("最多返回多少条(默认8条,适合日常浏览;需要更多可调大)"),
+    token: z.string().describe("用户token或用户名"),
+    date: z.string().optional().describe("日期（YYYY-MM-DD），默认今天"),
+    limit: z.number().int().min(1).max(200).default(8).describe("返回条数（默认8，想多看可以调大）"),
   },
   async ({ token, date, limit }) => {
     const { error, realToken } = requireToken(token);
@@ -299,7 +299,7 @@ server.tool(
             text: JSON.stringify({
               status: "empty",
               date: dateStr,
-              message: `${dateStr} 没有已保存的文章。请先调用 briefing_fetch_articles 抓取。`,
+              message: `${dateStr} 没有已保存的文章。请先抓取最新内容。`,
             }),
           },
         ],
@@ -322,8 +322,8 @@ server.tool(
 
 server.tool(
   "briefing_get_profile",
-  "获取用户的特质画像,包含关注领域、当前项目、噪音过滤规则等。\nClaude应在分析文章前先读取此画像,作为过滤和匹配的依据。",
-  { token: z.string().describe("用户token或注册时的用户名") },
+  "获取用户的兴趣偏好，包含关注领域、当前项目、不想看的内容等。\n在分析新闻前应先读取，作为筛选依据。",
+  { token: z.string().describe("用户token或用户名") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -336,7 +336,7 @@ server.tool(
             profile: getProfile(realToken!),
             filter_prompt: getProfilePrompt(realToken!),
             instructions:
-              "请根据此画像对文章进行匹配评估。" +
+              "请根据用户的兴趣偏好对文章进行匹配评估。" +
               "将文章分为：🔴高度匹配、🟡中等匹配、⚪低优先级、🚫噪音。" +
               "对每条高匹配文章，说明为什么跟用户相关以及建议的行动。" +
               "\n\n" +
@@ -360,14 +360,14 @@ server.tool(
 
 server.tool(
   "briefing_log_interaction",
-  "记录用户与简报的互动行为。\n当用户要求展开某条文章、深入讨论某个话题、或标记收藏时,\nClaude应自动调用此工具记录,用于后续的兴趣模式分析。",
+  "记录用户的阅读行为。当用户展开某条新闻、深入讨论、或收藏时，自动调用。\n用于后续分析用户的兴趣趋势。",
   {
-    token: z.string().describe("用户token"),
-    action: z.string().describe("互动类型: 'read_detail'=展开阅读, 'discussed'=深入讨论, 'saved'=标记收藏, 'feedback'=过滤反馈"),
+    token: z.string().describe("用户token或用户名"),
+    action: z.string().describe("行为类型：'read_detail'=展开阅读，'discussed'=深入讨论，'saved'=收藏，'feedback'=反馈"),
     article_title: z.string().default("").describe("相关文章标题"),
     article_url: z.string().default("").describe("相关文章链接"),
-    topics: z.array(z.string()).default([]).describe("相关话题标签,如['MCP', 'Edge AI', 'ESP32']"),
-    notes: z.string().default("").describe("备注信息"),
+    topics: z.array(z.string()).default([]).describe("相关话题标签，如['MCP', 'Edge AI']"),
+    notes: z.string().default("").describe("备注"),
   },
   async ({ token, action, article_title, article_url, topics, notes }) => {
     const { error, realToken } = requireToken(token);
@@ -384,10 +384,10 @@ server.tool(
 
 server.tool(
   "briefing_interaction_summary",
-  "生成用户最近的互动摘要。",
+  "分析用户最近的阅读兴趣趋势。用户说"我最近关注了什么"、"这周看了些啥"等时调用。",
   {
-    token: z.string().describe("用户token"),
-    days: z.number().int().min(1).max(90).default(7).describe("回顾最近多少天的互动(默认7天)"),
+    token: z.string().describe("用户token或用户名"),
+    days: z.number().int().min(1).max(90).default(7).describe("回顾天数（默认7天）"),
   },
   async ({ token, days }) => {
     const { error, realToken } = requireToken(token);
@@ -402,8 +402,8 @@ server.tool(
             status: "success",
             ...summary,
             instructions:
-              "请用中文自然地呈现这个摘要，帮用户看到自己的兴趣模式。" +
-              "如果有明显的话题偏好趋势，指出来。" +
+              "请用中文自然地呈现这个摘要，帮用户看到自己的兴趣趋势。" +
+              "如果有明显的话题偏好，指出来。" +
               "如果活跃度有波动，温和地提及（但不要说教）。",
           }),
         },
@@ -416,10 +416,10 @@ server.tool(
 
 server.tool(
   "briefing_view_log",
-  "查看最近的互动日志原始记录。",
+  "查看最近的阅读记录明细。",
   {
-    token: z.string().describe("用户token"),
-    limit: z.number().int().min(1).max(100).default(20).describe("最多返回多少条记录"),
+    token: z.string().describe("用户token或用户名"),
+    limit: z.number().int().min(1).max(100).default(20).describe("返回条数"),
   },
   async ({ token, limit }) => {
     const { error, realToken } = requireToken(token);
@@ -436,7 +436,7 @@ server.tool(
 
 server.prompt(
   "getting-started",
-  "首次使用？从这里开始 — 注册、建画像、选信源，3分钟搞定",
+  "第一次用？从这里开始——注册、设置偏好、选择信源，3分钟搞定",
   async () => ({
     messages: [
       {
@@ -444,54 +444,41 @@ server.prompt(
         content: {
           type: "text" as const,
           text:
-            "你好！欢迎使用 AI简报系统。我来帮你完成初始设置：\n\n" +
-            "**第1步：注册**\n请调用 briefing_register 为用户注册，获取一个token。\n\n" +
-            "**第2步：建画像**\n调用 briefing_create_profile_interactive 获取引导问卷，" +
-            "然后跟用户对话收集信息，整理后调用 briefing_set_profile 提交。\n\n" +
-            "**第3步：选信源**\n调用 briefing_suggest_sources 获取推荐，" +
-            "用户确认后调用 briefing_set_sources 订阅。\n\n" +
-            "**完成！** 之后用户说'看看今天的简报'就可以使用了。\n\n" +
-            "现在开始第1步，问用户想用什么名字注册。",
+            "我想开始用新闻简报功能。请帮我：\n\n" +
+            "1. 先注册一下\n" +
+            "2. 通过问答了解我关注什么、不想看什么\n" +
+            "3. 推荐适合我的新闻来源\n\n" +
+            "一步步来就好。",
         },
       },
     ],
   })
 );
 
-server.prompt("setup-profile", "重新设置或调整你的兴趣画像", async () => ({
+server.prompt("setup-profile", "重新设置你关注的内容和过滤偏好", async () => ({
   messages: [
     {
       role: "user" as const,
       content: {
         type: "text" as const,
         text:
-          "用户想设置或重新设置画像。\n\n" +
-          "请调用 briefing_create_profile_interactive 获取引导问卷，" +
-          "然后跟用户自然对话收集信息。\n" +
-          "收集完成后整理成画像JSON，调用 briefing_set_profile 提交。\n" +
-          "提交后建议调用 briefing_suggest_sources 帮用户更新信源。",
+          "我想重新设置我的新闻偏好。\n" +
+          "问我几个问题了解我现在关注什么、在做什么项目、不想看什么内容，然后帮我更新。",
       },
     },
   ],
 }));
 
-server.prompt("daily-briefing", "查看今天的个性化AI简报", async () => ({
+server.prompt("daily-briefing", "看看今天有什么值得关注的", async () => ({
   messages: [
     {
       role: "user" as const,
       content: {
         type: "text" as const,
-        text:
-          "用户想看今天的简报。请按以下顺序操作：\n\n" +
-          "1. 调用 briefing_get_profile 获取用户画像\n" +
-          "2. 调用 briefing_fetch_articles 抓取最新文章\n" +
-          "3. 调用 briefing_get_articles 获取文章列表\n" +
-          "4. 根据画像分析每条文章的匹配度\n" +
-          "5. 分为🔴高度匹配、🟡中等匹配、⚪低优先级、🚫已过滤，呈现给用户\n\n" +
-          "对🔴高度匹配中的重大消息，用web search查证官方来源。用中文回复。",
+        text: "看看今天有什么值得关注的新闻。",
       },
     },
-  ],
+  },
 }));
 
 // ── Start ────────────────────────────────────────────────────
