@@ -27,7 +27,7 @@
 ### 安装
 
 1. 拿到 `mcp-news-briefing.mcpb` 文件
-2. 打开 Claude Desktop → Settings → Extensions → Install Extension
+2. 打开 Claude Desktop → Settings → Extensions → Advanced Settings → Install Extension
 3. 选择这个文件
 4. 安装完成
 

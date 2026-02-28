@@ -91,7 +91,7 @@ interface SourceCategory {
   hn_keywords: string[];
 }
 
-const SOURCE_CATALOG: Record<string, SourceCategory> = {
+export const SOURCE_CATALOG: Record<string, SourceCategory> = {
   anthropic: {
     label: "Anthropic / Claude",
     keywords: ["anthropic", "claude", "mcp", "model context protocol"],

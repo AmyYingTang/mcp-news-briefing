@@ -63,15 +63,15 @@ export function setSourcesFromCategories(token: string, categoryIds: string[], k
     const cat = SOURCE_CATALOG[catId];
     if (!cat) continue;
     Object.assign(rss, cat.rss);
-    cat.reddit.forEach((r) => reddit.add(r));
-    cat.hn_keywords.forEach((k) => hnKeywords.add(k));
+    cat.reddit.forEach((r: string) => reddit.add(r));
+    cat.hn_keywords.forEach((k: string) => hnKeywords.add(k));
   }
 
   // Merge custom sources
   if (keepCustom) {
     Object.assign(rss, existing.custom_rss || {});
-    (existing.custom_reddit || []).forEach((r) => reddit.add(r));
-    (existing.custom_hn_keywords || []).forEach((k) => hnKeywords.add(k));
+    (existing.custom_reddit || []).forEach((r: string) => reddit.add(r));
+    (existing.custom_hn_keywords || []).forEach((k: string) => hnKeywords.add(k));
   }
 
   const result: UserSources = {
@@ -100,18 +100,18 @@ export function addCustomSources(
   }
   if (opts.reddit) {
     const customSet = new Set(sources.custom_reddit);
-    opts.reddit.forEach((r) => customSet.add(r));
+    opts.reddit.forEach((r: string) => customSet.add(r));
     sources.custom_reddit = [...customSet].sort();
     const allSet = new Set(sources.reddit);
-    opts.reddit.forEach((r) => allSet.add(r));
+    opts.reddit.forEach((r: string) => allSet.add(r));
     sources.reddit = [...allSet].sort();
   }
   if (opts.hn_keywords) {
     const customSet = new Set(sources.custom_hn_keywords);
-    opts.hn_keywords.forEach((k) => customSet.add(k));
+    opts.hn_keywords.forEach((k: string) => customSet.add(k));
     sources.custom_hn_keywords = [...customSet].sort();
     const allSet = new Set(sources.hn_keywords);
-    opts.hn_keywords.forEach((k) => allSet.add(k));
+    opts.hn_keywords.forEach((k: string) => allSet.add(k));
     sources.hn_keywords = [...allSet].sort();
   }
 
