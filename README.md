@@ -80,6 +80,61 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 | "帮我加个关注领域：量子计算" | 动态调整偏好 |
 | "我现在订阅了哪些来源？" | 查看当前订阅的信源 |
 
+### 📊 股票关注列表（Watchlist）
+
+除了新闻简报，还可以关注个股动态，支持美股和澳股。
+
+**添加股票：**
+
+> "帮我关注苹果和 CBA"
+
+系统会根据市场和行业自动推荐关注侧重面（财报、高管增减持、监管政策等），你可以调整。
+
+**查看股票动态：**
+
+> "看看我的股票有什么消息"
+
+每条新闻会标注利好/利空级别：🟢🟢 强利好 | 🟢 弱利好 | ⚪ 中性 | 🔴 弱利空 | 🔴🔴 强利空
+
+**股票相关操作：**
+
+| 你说的话 | 会发生什么 |
+|---------|-----------|
+| "帮我关注苹果" | 添加 AAPL 到关注列表，推荐侧重面 |
+| "帮我关注 CBA" | 添加 CBA.AX 到关注列表 |
+| "我关注了哪些股票" | 查看 watchlist 及侧重面配置 |
+| "AAPL 不看供应链了" | 调整 AAPL 的关注侧重面 |
+| "CBA 加上分析师评级" | 给 CBA.AX 增加关注维度 |
+| "看看我的股票" | 抓取并分析所有关注股票的最新消息 |
+| "不看 AAPL 了" | 从 watchlist 移除 |
+
+**侧重面（Focus）：**
+
+系统内置 12 个侧重面，按市场和行业自动推荐：
+
+| 侧重面 | 说明 |
+|--------|------|
+| 高管增减持 | 内部人士买入/卖出 |
+| 财报与业绩 | 季报、年报、业绩预告 |
+| 产品发布 | 新产品、重大更新 |
+| 竞争对手动态 | 市场份额变化 |
+| 监管政策 | 行业法规、反垄断、合规 |
+| 供应链 | 供应链中断/调整 |
+| 分析师评级 | 升降级、目标价 |
+| 诉讼合规 | 重大法律事件 |
+| 并购合作 | 收购、战略合作 |
+| 回购分红 | 资本回报政策变化 |
+| 利率政策 | 央行利率决议影响 |
+| 宏观经济 | GDP、通胀、就业等 |
+
+**信源策略：**
+
+- 🟢 **默认启用** — 公开免费信源（Yahoo Finance、Google News、Nasdaq、CNBC 等），添加股票时自动挂载
+- 🟡 **可选信源** — 有使用条款的信源（SEC EDGAR、Seeking Alpha、ASX Announcements 等），需你确认后启用
+- 澳股信源不可用时自动降级到 Google News AU 搜索
+
+股票动态也会自动集成到每日简报中——如果 watchlist 不为空，每日简报末尾会追加「关注股票动态」板块。
+
 ### 💡 提示
 
 - 偏好和信源随时可以调整，不需要重新注册
@@ -94,6 +149,12 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 |------|------|
 | macOS | `~/Library/Application Support/mcp-news-briefing/` |
 | Windows | `%APPDATA%\mcp-news-briefing\` |
+
+### ⚠️ 免责声明
+
+本工具从第三方 RSS 和公开 API 聚合信息。部分可选信源（SEC EDGAR、Seeking Alpha）有各自的使用条款——启用即表示你同意遵守相应条款。
+
+这不是投资建议。利好/利空情绪分析由 AI 模型生成，不应作为投资决策的唯一依据。请自行研究。
 
 ---
 
@@ -147,7 +208,9 @@ mcp-news-briefing/
     ├── profile.ts           # 兴趣偏好 CRUD、引导问卷、信源推荐库
     ├── sources.ts           # RSS / Reddit / HN 抓取 + 缓存
     ├── user-sources.ts      # 用户信源配置管理
-    └── interaction-log.ts   # 阅读行为追踪
+    ├── interaction-log.ts   # 阅读行为追踪
+    ├── watchlist.ts         # 股票关注列表 CRUD、侧重面推荐、信源目录
+    └── stock-sources.ts     # 股票新闻抓取（per-ticker RSS / 过滤型信源 / fallback）
 ```
 
 ### 架构
@@ -187,6 +250,12 @@ Claude Desktop
 | `briefing_log_interaction` | 记录阅读/讨论/收藏 |
 | `briefing_interaction_summary` | 兴趣趋势摘要 |
 | `briefing_view_log` | 查看阅读记录 |
+| `briefing_watchlist_set` | 添加/更新关注股票，自动推荐侧重面 |
+| `briefing_watchlist_get` | 查看关注列表及侧重面配置 |
+| `briefing_watchlist_remove` | 移除关注股票 |
+| `briefing_watchlist_update_focus` | 调整某只股票的关注侧重面 |
+| `briefing_stock_fetch` | 抓取关注股票的最新新闻 |
+| `briefing_stock_digest` | 获取股票新闻列表，供 AI 做利好/利空分析 |
 
 ### 新用户完整流程（工具调用顺序）
 
@@ -203,10 +272,12 @@ Claude Desktop
 - [x] 阅读行为追踪 & 兴趣趋势分析
 - [x] TypeScript 重写（Node.js 原生，.mcpb 就绪）
 - [x] .mcpb Desktop Extension 打包
+- [x] 股票关注列表（Watchlist）— 美股 / 澳股，侧重面推荐，利好利空分析
 - [ ] Anthropic Extension Directory 提交
 - [ ] OAuth 2.1（远程部署场景）
 - [ ] Twitter/X 数据源
 - [ ] 偏好自动演进（根据阅读行为调整关注权重）
+- [ ] 股票历史情绪趋势（某只股票过去一周的情绪变化）
 
 ## License
 

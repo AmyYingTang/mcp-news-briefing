@@ -2,8 +2,8 @@
   "manifest_version": "0.3",
   "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
-  "version": "0.1.0",
-  "description": "Personalized AI & tech news filtering — say 'what's worth reading today?' and get a curated briefing from RSS, Reddit, and Hacker News based on your interest profile.",
+  "version": "0.2.0",
+  "description": "Personalized news briefing + stock watchlist — curated news from RSS, Reddit, and Hacker News based on your interests, plus per-stock sentiment analysis (bullish/bearish) with customizable focus areas. Supports US and ASX markets.",
   "author": {
     "name": "Amy"
   },
@@ -72,6 +72,30 @@
     {
       "name": "briefing_view_log",
       "description": "View recent reading history"
+    },
+    {
+      "name": "briefing_watchlist_set",
+      "description": "Add a stock to your watchlist with auto-recommended focus areas"
+    },
+    {
+      "name": "briefing_watchlist_get",
+      "description": "View your stock watchlist and focus configurations"
+    },
+    {
+      "name": "briefing_watchlist_remove",
+      "description": "Remove a stock from your watchlist"
+    },
+    {
+      "name": "briefing_watchlist_update_focus",
+      "description": "Adjust focus areas (e.g. earnings, regulatory) for a stock"
+    },
+    {
+      "name": "briefing_stock_fetch",
+      "description": "Fetch latest news for your watchlist stocks"
+    },
+    {
+      "name": "briefing_stock_digest",
+      "description": "Get stock news for bullish/bearish sentiment analysis"
     }
   ],
   "prompts": [
@@ -87,8 +111,13 @@
     },
     {
       "name": "daily-briefing",
-      "description": "See what's worth reading today",
+      "description": "See what's worth reading today (includes stock updates if watchlist exists)",
       "text": "看看今天有什么值得关注的新闻"
+    },
+    {
+      "name": "stock-briefing",
+      "description": "Check latest news and sentiment for your watchlist stocks",
+      "text": "看看我关注的股票有什么新消息"
     }
   ]
 }
