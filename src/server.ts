@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { registerUser, resolveToken, verifyToken } from "./auth.js";
+import { registerUser, resolveToken, verifyToken, setDefault, getDefaultName } from "./auth.js";
 import { getProfile, setProfile, getProfilePrompt, PROFILE_QUESTIONNAIRE, suggestSources } from "./profile.js";
 import { getSources, setSourcesFromCategories, addCustomSources } from "./user-sources.js";
 import { fetchAll, loadTodayArticles, loadArticlesByDate, type Article } from "./sources.js";
@@ -26,18 +26,20 @@ import { fetchStockNews, loadStockArticles } from "./stock-sources.js";
 // ── Token validation helper ──────────────────────────────────
 
 function requireToken(token: string): { error?: string; realToken?: string } {
-  if (!token?.trim()) {
-    return {
-      error: JSON.stringify({
-        status: "error",
-        error: "missing_token",
-        message: "需要提供token或用户名。如果还没有注册，请先用 briefing_register 注册。",
-      }),
-    };
-  }
+  // resolveToken handles empty string → default fallback
+  const realToken = resolveToken(token ?? "");
 
-  const realToken = resolveToken(token.trim());
   if (!realToken) {
+    // Distinguish: did the user pass something that didn't match, or was it empty?
+    if (!token?.trim()) {
+      return {
+        error: JSON.stringify({
+          status: "error",
+          error: "no_default",
+          message: "找不到默认用户。请告诉我你的用户名，或先用 briefing_register 注册。",
+        }),
+      };
+    }
     return {
       error: JSON.stringify({
         status: "error",
@@ -76,17 +78,54 @@ server.tool(
   async ({ name }) => {
     const result = registerUser(name);
 
+    const defaultHint = result.is_new
+      ? (result.is_default
+        ? "\n\n✅ 已设为默认身份，后续无需再指定用户名。"
+        : `\n\n你已有默认身份 ${getDefaultName() || "（未知）"}，如需切换可以告诉我。`)
+      : "";
+
     const message = result.is_new
-      ? `🎉 注册成功！\n\n**用户名：** ${result.name}\n**Token：** ${result.token}\n\n⚠️ 请保存此token，后续也可以用名字来识别。\n\n下一步：可以设置你的兴趣偏好，让简报更精准。`
+      ? `🎉 注册成功！\n\n**用户名：** ${result.name}\n**Token：** ${result.token}\n\n⚠️ 请保存此token，后续也可以用名字来识别。${defaultHint}\n\n下一步：可以设置你的兴趣偏好，让简报更精准。`
       : `用户 ${result.name} 已存在，无需重复注册。\nToken：${result.token}\n\n可以直接说「看看今天的新闻」开始使用。`;
 
     return {
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify({ status: "success", token: result.token, name: result.name, is_new: result.is_new, message }),
+          text: JSON.stringify({ status: "success", token: result.token, name: result.name, is_new: result.is_new, is_default: result.is_default, message }),
         },
       ],
+    };
+  }
+);
+
+// ── Tool: Set Default Identity ───────────────────────────────
+
+server.tool(
+  "briefing_set_default",
+  "切换默认身份。用户说「把默认身份切到xxx」「以后默认用xxx的身份」时调用。",
+  { token: z.string().describe("要设为默认的 token 或用户名") },
+  async ({ token }) => {
+    const result = setDefault(token);
+
+    if (!result.success) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ status: "error", error: "user_not_found", message: result.error }),
+        }],
+      };
+    }
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          default_name: result.name,
+          message: `已将默认身份切换为 ${result.name}。后续不指定身份时将自动使用此账号。`,
+        }),
+      }],
     };
   }
 );
@@ -97,7 +136,7 @@ server.tool(
   "briefing_set_profile",
   "设置或更新用户的兴趣偏好。用户说「我想关注XX」「帮我加个兴趣」「不想再看XX」等时调用。\n只传需要更新的字段，其他保持不变。兴趣偏好是新闻过滤的核心依据。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     profile: z
       .object({
         name: z.string().optional(),
@@ -125,7 +164,7 @@ server.tool(
 server.tool(
   "briefing_create_profile_interactive",
   "通过问答了解用户的兴趣偏好。用户说「帮我设置偏好」「重新设置我关注的内容」等时调用。\n返回引导问题，收集完毕后整理成JSON调用 briefing_set_profile 提交。",
-  { token: z.string().describe("用户token或用户名") },
+  { token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。") },
   async ({ token }) => {
     const { error } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -141,7 +180,7 @@ server.tool(
 server.tool(
   "briefing_suggest_sources",
   "根据用户的兴趣偏好推荐新闻来源（RSS、Reddit、Hacker News）。\n用户说「帮我推荐信源」「有什么好的订阅推荐」等时调用。",
-  { token: z.string().describe("用户token或用户名") },
+  { token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -159,7 +198,7 @@ server.tool(
   "briefing_set_sources",
   "按分类订阅新闻来源。用户确认推荐的信源后调用。\n已有的自定义信源会保留。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     category_ids: z
       .array(z.string())
       .describe("信源分类ID列表，如 ['anthropic', 'embedded', 'ai_general']。来自 briefing_suggest_sources 的推荐结果。"),
@@ -197,7 +236,7 @@ server.tool(
   "briefing_add_sources",
   "添加自定义新闻来源（追加，不会覆盖已有的）。\n用户说「帮我加一个RSS」「我还想看XX的Reddit」等时调用。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     rss: z.record(z.string()).optional().describe('自定义RSS源，格式 {"名称": "URL"}'),
     reddit: z.array(z.string()).optional().describe('Reddit板块名称列表，如 ["python", "golang"]'),
     hn_keywords: z.array(z.string()).optional().describe('Hacker News过滤关键词，如 ["kubernetes", "docker"]'),
@@ -218,7 +257,7 @@ server.tool(
 server.tool(
   "briefing_get_sources",
   "查看当前订阅了哪些新闻来源。用户说「我现在订阅了什么」「看看我的信源」等时调用。",
-  { token: z.string().describe("用户token或用户名") },
+  { token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -236,7 +275,7 @@ server.tool(
   "briefing_fetch_articles",
   "从订阅的新闻来源抓取最新内容。用户说「看看今天的新闻」「最近有什么值得看的」「这周的简报」等时，先调用此工具获取数据。\n\n时间范围：24=今天，168=本周，720=本月。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     hours_back: z
       .number()
       .int()
@@ -282,7 +321,7 @@ server.tool(
   "briefing_get_articles",
   "获取已抓取的文章列表。返回标题、来源、摘要等，供Claude根据用户的兴趣偏好筛选和分析。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     date: z.string().optional().describe("日期（YYYY-MM-DD），默认今天"),
     limit: z.number().int().min(1).max(200).default(8).describe("返回条数（默认8，想多看可以调大）"),
   },
@@ -325,7 +364,7 @@ server.tool(
 server.tool(
   "briefing_get_profile",
   "获取用户的兴趣偏好，包含关注领域、当前项目、不想看的内容等。\n在分析新闻前应先读取，作为筛选依据。",
-  { token: z.string().describe("用户token或用户名") },
+  { token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -364,7 +403,7 @@ server.tool(
   "briefing_log_interaction",
   "记录用户的阅读行为。当用户展开某条新闻、深入讨论、或收藏时，自动调用。\n用于后续分析用户的兴趣趋势。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     action: z.string().describe("行为类型：read_detail=展开阅读，discussed=深入讨论，saved=收藏，feedback=反馈"),
     article_title: z.string().default("").describe("相关文章标题"),
     article_url: z.string().default("").describe("相关文章链接"),
@@ -388,7 +427,7 @@ server.tool(
   "briefing_interaction_summary",
   "分析用户最近的阅读兴趣趋势。用户说「我最近关注了什么」「这周看了些啥」等时调用。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     days: z.number().int().min(1).max(90).default(7).describe("回顾天数（默认7天）"),
   },
   async ({ token, days }) => {
@@ -420,7 +459,7 @@ server.tool(
   "briefing_view_log",
   "查看最近的阅读记录明细。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     limit: z.number().int().min(1).max(100).default(20).describe("返回条数"),
   },
   async ({ token, limit }) => {
@@ -443,7 +482,7 @@ server.tool(
   "可选信源（optin_sources）需用户明确说「加上」才填入，添加前告知用户相应限制说明（optin_notices）。\n\n" +
   "sector 常用值：Technology / Financials / Healthcare / Energy / Consumer / Other",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     ticker: z.string().describe('股票代码，美股如 "AAPL"，澳股如 "CBA.AX"'),
     name: z.string().describe('公司全名，如 "Apple Inc."'),
     market: z.enum(["US", "ASX"]).describe("交易市场"),
@@ -494,7 +533,7 @@ server.tool(
 server.tool(
   "briefing_watchlist_get",
   "查看关注的股票列表及每只股票的侧重面配置。用户说「我关注了哪些股票」「看看我的 watchlist」等时调用。",
-  { token: z.string().describe("用户token或用户名") },
+  { token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。") },
   async ({ token }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
@@ -543,7 +582,7 @@ server.tool(
   "briefing_watchlist_remove",
   "从关注列表中移除股票。用户说「不看 AAPL 了」「把 CBA 从 watchlist 删掉」等时调用。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     ticker: z.string().describe("要移除的股票代码，如 AAPL 或 CBA.AX"),
   },
   async ({ token, ticker }) => {
@@ -574,7 +613,7 @@ server.tool(
   "supply_chain / analyst_rating / litigation / ma_partnership / buyback_dividend / " +
   "interest_rate_policy / macro_outlook",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     ticker: z.string().describe("股票代码，如 AAPL 或 CBA.AX"),
     add_focus: z.array(z.string()).optional().describe("要新增的侧重面ID列表"),
     remove_focus: z.array(z.string()).optional().describe("要移除的侧重面ID列表"),
@@ -625,7 +664,7 @@ server.tool(
   "抓取关注股票的最新新闻。用户说「看看我的股票有什么消息」「股票有什么新动态」等时调用。\n" +
   "不传 tickers 则抓取整个 watchlist。抓取后调用 briefing_stock_digest 获取文章列表做分析。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     tickers: z.array(z.string()).optional().describe("只抓取这些 ticker（可选，不填则抓取全部 watchlist）"),
     hours_back: z.number().int().min(1).max(720).default(24).describe("回溯小时数（默认24）"),
   },
@@ -688,7 +727,7 @@ server.tool(
   "5. 最后给一句整体情绪总结\n\n" +
   "用中文回复。",
   {
-    token: z.string().describe("用户token或用户名"),
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     ticker: z.string().optional().describe("只看某只股票（可选，不填则返回全部）"),
     limit: z.number().int().min(1).max(100).default(30).describe("返回条数（默认30）"),
   },

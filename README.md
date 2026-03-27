@@ -39,6 +39,12 @@
 
 你会拿到一个token，**请保存好**。不过后续你用名字也能识别身份，不用每次贴token。
 
+第一个注册的用户会自动成为**默认身份**——之后跟Claude说"今天有什么新闻"时不需要指定是谁，直接用就行。
+
+如果你注册了多个账号（比如一个看AI、一个看天文），可以切换默认身份：
+
+> "把默认身份切到（名字）"
+
 ### 设置兴趣偏好
 
 有两种方式：
@@ -138,7 +144,7 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 ### 💡 提示
 
 - 偏好和信源随时可以调整，不需要重新注册
-- 一个人可以注册多个token，比如一个看AI、一个看天文，各自独立
+- 一个人可以注册多个token，比如一个看AI、一个看天文，各自独立；用 `briefing_set_default` 切换当前默认身份
 - 信息来源包括RSS、Reddit和Hacker News，覆盖面很广
 
 ### 数据存储
@@ -237,7 +243,8 @@ Claude Desktop
 
 | 工具名 | 功能 |
 |--------|------|
-| `briefing_register` | 注册新用户，获取token |
+| `briefing_register` | 注册新用户，获取token（第一个自动设为默认身份） |
+| `briefing_set_default` | 切换默认身份（多账号时使用） |
 | `briefing_create_profile_interactive` | 兴趣偏好引导问卷 |
 | `briefing_set_profile` | 设置/更新兴趣偏好 |
 | `briefing_get_profile` | 获取兴趣偏好 |
@@ -273,6 +280,7 @@ Claude Desktop
 - [x] TypeScript 重写（Node.js 原生，.mcpb 就绪）
 - [x] .mcpb Desktop Extension 打包
 - [x] 股票关注列表（Watchlist）— 美股 / 澳股，侧重面推荐，利好利空分析
+- [x] 默认身份（注册后无需每次指定用户名，多账号可切换）
 - [ ] Anthropic Extension Directory 提交
 - [ ] OAuth 2.1（远程部署场景）
 - [ ] Twitter/X 数据源

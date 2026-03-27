@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Personalized news briefing + stock watchlist — curated news from RSS, Reddit, and Hacker News based on your interests, plus per-stock sentiment analysis (bullish/bearish) with customizable focus areas. Supports US and ASX markets.",
   "author": {
     "name": "Amy"
@@ -24,6 +24,10 @@
     {
       "name": "briefing_register",
       "description": "Register and get a token for personalized briefings"
+    },
+    {
+      "name": "briefing_set_default",
+      "description": "Switch the default identity used when no token is specified"
     },
     {
       "name": "briefing_create_profile_interactive",
