@@ -22,6 +22,12 @@ export interface SentimentBreakdown {
   strong_bearish: number;
 }
 
+export interface AlertTriggerRecord {
+  alert_id: string;
+  description: string;
+  headline: string;
+}
+
 export interface SentimentSnapshot {
   date: string;                    // YYYY-MM-DD
   sentiment_score: number;         // weighted average: +2/+1/0/-1/-2
@@ -29,6 +35,7 @@ export interface SentimentSnapshot {
   article_count: number;
   breakdown: SentimentBreakdown;
   key_events: string[];            // 🟢🟢 or 🔴🔴 level headlines
+  alert_triggers?: AlertTriggerRecord[];  // alerts triggered this day
   close_price?: number;            // end-of-day price (USD/AUD)
   price_change_pct?: number;       // daily change %
   price_source?: string;           // "yahoo" | "claude"

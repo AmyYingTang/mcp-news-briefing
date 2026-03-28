@@ -1,5 +1,5 @@
 /**
- * Stock watchlist — CRUD, focus catalog, default focus recommendation, source catalog
+ * Stock watchlist — CRUD, focus catalog, default focus recommendation, source catalog, alerts
  */
 
 import { join } from "node:path";
@@ -14,6 +14,48 @@ export interface CustomSource {
   url: string;
 }
 
+// ── Alert types ─────────────────────────────────────────────
+
+export type AlertSensitivity = "loose" | "normal" | "strict";
+export type AlertStatus = "active" | "triggered" | "expired" | "dismissed";
+
+export interface StockAlert {
+  id: string;
+  description: string;
+  keywords: string[];
+  source_report: string;
+  created_at: string;
+  expires_at: string;
+  sensitivity: AlertSensitivity;
+  status: AlertStatus;
+  triggered_count: number;
+  last_triggered_at: string | null;
+}
+
+export interface AlertScope {
+  markets: string[];
+  sectors: string[];
+  tickers: string[];
+}
+
+export interface GlobalAlert extends StockAlert {
+  scope: AlertScope;
+}
+
+export interface AlertInput {
+  description: string;
+  keywords: string[];
+  expires_in_months?: number;
+  sensitivity?: AlertSensitivity;
+  source_report?: string;
+}
+
+export interface GlobalAlertInput extends AlertInput {
+  scope?: AlertScope;
+}
+
+// ── Watchlist entry ─────────────────────────────────────────
+
 export interface WatchlistEntry {
   name: string;
   market: Market;
@@ -21,8 +63,11 @@ export interface WatchlistEntry {
   focus: string[];
   optin_sources: string[];
   custom_sources: CustomSource[];
+  alerts: StockAlert[];
   added_at: string;
 }
+
+const MAX_ALERTS_PER_TICKER = 10;
 
 /** ticker → entry */
 export type Watchlist = Record<string, WatchlistEntry>;
@@ -248,6 +293,7 @@ export function setWatchlistEntry(
     focus,
     optin_sources: input.optin_sources ?? [],
     custom_sources: input.custom_sources ?? [],
+    alerts: wl[ticker]?.alerts ?? [],
     added_at: wl[ticker]?.added_at ?? new Date().toISOString(),
   };
 
@@ -403,4 +449,399 @@ export function resolveSourceUrls(
   }));
 
   return { per_ticker_urls, filtered_urls, optin_urls, custom_urls };
+}
+
+// ── Alert CRUD ──────────────────────────────────────────────
+
+function nextAlertId(prefix: string, existing: StockAlert[]): string {
+  const nums = existing
+    .map((a) => parseInt(a.id.split("_").pop() || "0", 10))
+    .filter((n) => !isNaN(n));
+  const next = (nums.length > 0 ? Math.max(...nums) : 0) + 1;
+  return `alert_${prefix.toLowerCase()}_${String(next).padStart(3, "0")}`;
+}
+
+/**
+ * Batch-create alerts for a ticker.
+ * Enforces MAX_ALERTS_PER_TICKER limit.
+ */
+export function setAlerts(
+  token: string,
+  ticker: string,
+  inputs: AlertInput[],
+): { alerts: StockAlert[]; error?: string } {
+  const wl = getWatchlist(token);
+  const entry = wl[ticker];
+  if (!entry) return { alerts: [], error: `${ticker} 不在 watchlist 中` };
+
+  if (!entry.alerts) entry.alerts = [];
+
+  const activeCount = entry.alerts.filter((a) => a.status === "active" || a.status === "triggered").length;
+  const slotsLeft = MAX_ALERTS_PER_TICKER - activeCount;
+  if (inputs.length > slotsLeft) {
+    return {
+      alerts: [],
+      error: `${ticker} 已有 ${activeCount} 条活跃预警，最多 ${MAX_ALERTS_PER_TICKER} 条。还能添加 ${slotsLeft} 条。`,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const created: StockAlert[] = [];
+
+  for (const input of inputs) {
+    const months = input.expires_in_months ?? 6;
+    const expiresAt = new Date(Date.now() + months * 30 * 86400 * 1000).toISOString();
+    const alert: StockAlert = {
+      id: nextAlertId(ticker, entry.alerts),
+      description: input.description,
+      keywords: input.keywords,
+      source_report: input.source_report ?? "用户手动创建",
+      created_at: now,
+      expires_at: expiresAt,
+      sensitivity: input.sensitivity ?? "normal",
+      status: "active",
+      triggered_count: 0,
+      last_triggered_at: null,
+    };
+    entry.alerts.push(alert);
+    created.push(alert);
+  }
+
+  writeJSON(watchlistPath(token), wl);
+  return { alerts: created };
+}
+
+/**
+ * List alerts. If ticker is provided, list that ticker's alerts.
+ * Otherwise list all alerts across all tickers.
+ * Also includes global alerts.
+ */
+export function listAlerts(
+  token: string,
+  ticker?: string,
+  statusFilter: "active" | "all" = "all",
+): { ticker_alerts: Record<string, StockAlert[]>; global_alerts: GlobalAlert[] } {
+  const wl = getWatchlist(token);
+  const tickerAlerts: Record<string, StockAlert[]> = {};
+
+  const tickers = ticker ? [ticker] : Object.keys(wl);
+  for (const t of tickers) {
+    const entry = wl[t];
+    if (!entry) continue;
+    let alerts = entry.alerts || [];
+    if (statusFilter === "active") {
+      alerts = alerts.filter((a) => a.status === "active" || a.status === "triggered");
+    }
+    if (alerts.length > 0) tickerAlerts[t] = alerts;
+  }
+
+  let globals = getGlobalAlerts(token);
+  if (statusFilter === "active") {
+    globals = globals.filter((a) => a.status === "active" || a.status === "triggered");
+  }
+
+  return { ticker_alerts: tickerAlerts, global_alerts: globals };
+}
+
+/**
+ * Update a single alert by ID (searches across all tickers + global).
+ */
+export function updateAlert(
+  token: string,
+  alertId: string,
+  changes: {
+    sensitivity?: AlertSensitivity;
+    extend_months?: number;
+    add_keywords?: string[];
+    remove_keywords?: string[];
+    description?: string;
+    status?: "dismissed";
+  },
+): StockAlert | GlobalAlert | null {
+  // Search in ticker alerts
+  const wl = getWatchlist(token);
+  for (const entry of Object.values(wl)) {
+    if (!entry.alerts) continue;
+    const alert = entry.alerts.find((a) => a.id === alertId);
+    if (alert) {
+      applyAlertChanges(alert, changes);
+      writeJSON(watchlistPath(token), wl);
+      return alert;
+    }
+  }
+
+  // Search in global alerts
+  const globals = getGlobalAlerts(token);
+  const globalAlert = globals.find((a) => a.id === alertId);
+  if (globalAlert) {
+    applyAlertChanges(globalAlert, changes);
+    writeJSON(globalAlertsPath(token), globals);
+    return globalAlert;
+  }
+
+  return null;
+}
+
+function applyAlertChanges(
+  alert: StockAlert,
+  changes: {
+    sensitivity?: AlertSensitivity;
+    extend_months?: number;
+    add_keywords?: string[];
+    remove_keywords?: string[];
+    description?: string;
+    status?: "dismissed";
+  },
+): void {
+  if (changes.sensitivity) alert.sensitivity = changes.sensitivity;
+  if (changes.description) alert.description = changes.description;
+  if (changes.status === "dismissed") alert.status = "dismissed";
+  if (changes.extend_months) {
+    const current = new Date(alert.expires_at);
+    current.setDate(current.getDate() + changes.extend_months * 30);
+    alert.expires_at = current.toISOString();
+  }
+  if (changes.add_keywords) {
+    const set = new Set(alert.keywords);
+    for (const kw of changes.add_keywords) set.add(kw);
+    alert.keywords = [...set];
+  }
+  if (changes.remove_keywords) {
+    const removeSet = new Set(changes.remove_keywords);
+    alert.keywords = alert.keywords.filter((kw) => !removeSet.has(kw));
+  }
+}
+
+/**
+ * Dismiss one or more alerts by ID.
+ */
+export function dismissAlerts(
+  token: string,
+  alertIds: string[],
+): string[] {
+  const idSet = new Set(alertIds);
+  const dismissed: string[] = [];
+
+  const wl = getWatchlist(token);
+  for (const entry of Object.values(wl)) {
+    if (!entry.alerts) continue;
+    for (const alert of entry.alerts) {
+      if (idSet.has(alert.id) && alert.status !== "dismissed") {
+        alert.status = "dismissed";
+        dismissed.push(alert.id);
+      }
+    }
+  }
+  writeJSON(watchlistPath(token), wl);
+
+  const globals = getGlobalAlerts(token);
+  for (const alert of globals) {
+    if (idSet.has(alert.id) && alert.status !== "dismissed") {
+      alert.status = "dismissed";
+      dismissed.push(alert.id);
+    }
+  }
+  writeJSON(globalAlertsPath(token), globals);
+
+  return dismissed;
+}
+
+/**
+ * Check and expire stale alerts. Called during stock_fetch / stock_digest.
+ */
+const ALERT_RETENTION_MS = 180 * 86400 * 1000; // 6 months
+
+export function expireStaleAlerts(token: string): void {
+  const now = new Date().toISOString();
+  const retentionCutoff = new Date(Date.now() - ALERT_RETENTION_MS).toISOString();
+
+  const wl = getWatchlist(token);
+  let changed = false;
+  for (const entry of Object.values(wl)) {
+    if (!entry.alerts) continue;
+    // Expire active alerts past their window
+    for (const alert of entry.alerts) {
+      if ((alert.status === "active" || alert.status === "triggered") && alert.expires_at < now) {
+        alert.status = "expired";
+        changed = true;
+      }
+    }
+    // Purge expired/dismissed alerts older than 6 months
+    const before = entry.alerts.length;
+    entry.alerts = entry.alerts.filter((a) =>
+      (a.status !== "expired" && a.status !== "dismissed") || a.expires_at > retentionCutoff,
+    );
+    if (entry.alerts.length !== before) changed = true;
+  }
+  if (changed) writeJSON(watchlistPath(token), wl);
+
+  const globals = getGlobalAlerts(token);
+  let globalChanged = false;
+  for (const alert of globals) {
+    if ((alert.status === "active" || alert.status === "triggered") && alert.expires_at < now) {
+      alert.status = "expired";
+      globalChanged = true;
+    }
+  }
+  const beforeG = globals.length;
+  const filtered = globals.filter((a) =>
+    (a.status !== "expired" && a.status !== "dismissed") || a.expires_at > retentionCutoff,
+  );
+  if (filtered.length !== beforeG) globalChanged = true;
+  if (globalChanged) writeJSON(globalAlertsPath(token), filtered);
+}
+
+/**
+ * Record that an alert was triggered. Updates count and timestamp.
+ */
+export function recordAlertTrigger(
+  token: string,
+  alertId: string,
+): void {
+  const now = new Date().toISOString();
+
+  const wl = getWatchlist(token);
+  for (const entry of Object.values(wl)) {
+    if (!entry.alerts) continue;
+    const alert = entry.alerts.find((a) => a.id === alertId);
+    if (alert) {
+      alert.triggered_count += 1;
+      alert.last_triggered_at = now;
+      if (alert.status === "active") alert.status = "triggered";
+      writeJSON(watchlistPath(token), wl);
+      return;
+    }
+  }
+
+  const globals = getGlobalAlerts(token);
+  const globalAlert = globals.find((a) => a.id === alertId);
+  if (globalAlert) {
+    globalAlert.triggered_count += 1;
+    globalAlert.last_triggered_at = now;
+    if (globalAlert.status === "active") globalAlert.status = "triggered";
+    writeJSON(globalAlertsPath(token), globals);
+  }
+}
+
+/**
+ * Get all active alerts relevant to a specific ticker
+ * (per-stock alerts + matching global alerts).
+ */
+export function getActiveAlertsForTicker(
+  token: string,
+  ticker: string,
+): { stock_alerts: StockAlert[]; global_alerts: GlobalAlert[] } {
+  const wl = getWatchlist(token);
+  const entry = wl[ticker];
+
+  const stockAlerts = (entry?.alerts || [])
+    .filter((a) => a.status === "active" || a.status === "triggered");
+
+  const globals = getGlobalAlerts(token)
+    .filter((a) => a.status === "active" || a.status === "triggered")
+    .filter((a) => {
+      if (!entry) return false;
+      const { scope } = a;
+      // Market match
+      if (scope.markets.length > 0 && !scope.markets.includes(entry.market)) return false;
+      // Sector match (empty = all sectors)
+      if (scope.sectors.length > 0 && !scope.sectors.includes(entry.sector)) return false;
+      // Ticker match (empty = all tickers in matching market/sector)
+      if (scope.tickers.length > 0 && !scope.tickers.includes(ticker)) return false;
+      return true;
+    });
+
+  return { stock_alerts: stockAlerts, global_alerts: globals };
+}
+
+/**
+ * Get alerts that are expiring within `days` days. Used for near-expiry reminders.
+ */
+export function getExpiringAlerts(
+  token: string,
+  days = 7,
+): { ticker: string; alert: StockAlert }[] {
+  const cutoff = new Date(Date.now() + days * 86400 * 1000).toISOString();
+  const now = new Date().toISOString();
+  const results: { ticker: string; alert: StockAlert }[] = [];
+
+  const wl = getWatchlist(token);
+  for (const [ticker, entry] of Object.entries(wl)) {
+    for (const alert of entry.alerts || []) {
+      if ((alert.status === "active" || alert.status === "triggered") &&
+          alert.expires_at > now && alert.expires_at <= cutoff) {
+        results.push({ ticker, alert });
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Get alerts with high noise (>10 triggers in 30 days).
+ */
+export function getNoisyAlerts(
+  token: string,
+  threshold = 10,
+): { ticker: string; alert: StockAlert }[] {
+  const cutoff30d = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
+  const results: { ticker: string; alert: StockAlert }[] = [];
+
+  const wl = getWatchlist(token);
+  for (const [ticker, entry] of Object.entries(wl)) {
+    for (const alert of entry.alerts || []) {
+      if ((alert.status === "active" || alert.status === "triggered") &&
+          alert.triggered_count >= threshold &&
+          alert.created_at > cutoff30d) {
+        results.push({ ticker, alert });
+      }
+    }
+  }
+  return results;
+}
+
+// ── Global alerts ───────────────────────────────────────────
+
+function globalAlertsPath(token: string): string {
+  return join(getUserDataDir(token), "global_alerts.json");
+}
+
+function getGlobalAlerts(token: string): GlobalAlert[] {
+  return readJSON<GlobalAlert[]>(globalAlertsPath(token), []);
+}
+
+/**
+ * Batch-create global alerts (cross-stock, macro-level).
+ */
+export function setGlobalAlerts(
+  token: string,
+  inputs: GlobalAlertInput[],
+): GlobalAlert[] {
+  const existing = getGlobalAlerts(token);
+  const now = new Date().toISOString();
+  const created: GlobalAlert[] = [];
+
+  for (const input of inputs) {
+    const months = input.expires_in_months ?? 6;
+    const expiresAt = new Date(Date.now() + months * 30 * 86400 * 1000).toISOString();
+    const id = `galert_${String(existing.length + created.length + 1).padStart(3, "0")}`;
+    const alert: GlobalAlert = {
+      id,
+      description: input.description,
+      keywords: input.keywords,
+      source_report: input.source_report ?? "用户手动创建",
+      created_at: now,
+      expires_at: expiresAt,
+      sensitivity: input.sensitivity ?? "normal",
+      status: "active",
+      triggered_count: 0,
+      last_triggered_at: null,
+      scope: input.scope ?? { markets: [], sectors: [], tickers: [] },
+    };
+    existing.push(alert);
+    created.push(alert);
+  }
+
+  writeJSON(globalAlertsPath(token), existing);
+  return created;
 }

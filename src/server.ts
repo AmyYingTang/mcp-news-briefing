@@ -20,11 +20,16 @@ import { getSources, setSourcesFromCategories, addCustomSources } from "./user-s
 import { fetchAll, loadTodayArticles, loadArticlesByDate, type Article } from "./sources.js";
 import { logInteraction, getInteractionSummary, getFullLog } from "./interaction-log.js";
 import { log } from "./storage.js";
-import { getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, updateCustomSources, FOCUS_CATALOG, type Market, type CustomSource } from "./watchlist.js";
+import {
+  getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, updateCustomSources,
+  setAlerts, listAlerts, updateAlert, dismissAlerts, expireStaleAlerts, recordAlertTrigger,
+  getActiveAlertsForTicker, getExpiringAlerts, getNoisyAlerts, setGlobalAlerts,
+  FOCUS_CATALOG, type Market, type CustomSource, type AlertInput, type GlobalAlertInput, type AlertScope,
+} from "./watchlist.js";
 import { fetchStockNews, loadStockArticles } from "./stock-sources.js";
 import {
   recordSnapshot, getSnapshots, fetchClosePrice, detectDivergence,
-  computeSentimentLabel, type SentimentBreakdown, type SentimentSnapshot,
+  computeSentimentLabel, type SentimentBreakdown, type SentimentSnapshot, type AlertTriggerRecord,
 } from "./stock-history.js";
 
 // ── Token validation helper ──────────────────────────────────
@@ -806,17 +811,27 @@ server.tool(
 
 server.tool(
   "briefing_stock_digest",
-  "获取已抓取的股票新闻列表，供分析利好/利空。拿到数据后请：\n" +
+  "获取已抓取的股票新闻列表，供分析利好/利空。核心定位是**帮用户提前看到风险**。拿到数据后请：\n" +
   "1. 根据该股票的侧重面（focus）逐条分析\n" +
   "2. 每条新闻标注：🟢🟢 强利好 | 🟢 弱利好 | ⚪ 中性 | 🔴 弱利空 | 🔴🔴 强利空\n" +
   "3. 跟侧重面无关但重大的消息也要标注\n" +
   "4. 对🟢🟢和🔴🔴级别的消息，用 web search 查证官方来源\n" +
-  "5. 最后给一句整体情绪总结\n" +
-  "6. 分析完成后，调用 briefing_stock_history_record 记录本次情绪快照（评分、五档分布、关键事件摘要）\n" +
-  "7. 如果该股票的历史快照 >= 5 天（通过返回的 divergence 字段判断），检查情绪与股价是否背离：\n" +
-  "   - 持续利好但股价下跌 → 分析原因（已被 price in？宏观风险？遗漏消息？）\n" +
-  "   - 持续利空但股价上涨 → 分析原因（超卖反弹？利空出尽？市场预期转变？）\n" +
-  "   - 将背离分析作为单独板块呈现\n\n" +
+  "5. 检查该股票的 active alerts（返回的 stock_alerts + global_alerts）：\n" +
+  "   - 对每条新闻，检查是否命中任一 alert 的 keywords\n" +
+  "   - 命中时根据 alert 的 sensitivity 判断相关性：\n" +
+  "     loose = 可能相关即触发 / normal = 直接相关才触发 / strict = 确定性进展才触发\n" +
+  "   - 触发的新闻用 ⚠️ 标注并附上 alert 描述\n" +
+  "   - 触发后立即 web search 深度查证，侧重\"这个风险有多大、是否需要关注\"\n" +
+  "   - 通用预警触发用 🌐⚠️ 标注\n" +
+  "6. 呈现顺序：预警触发和利空消息优先排列，利好消息正常列出但不渲染成\"机会\"\n" +
+  "7. 整体情绪总结\n" +
+  "8. 如有 alert 被触发，在总结末尾单独列出预警触发情况，并调用 briefing_stock_alert_trigger 记录\n" +
+  "9. 分析完成后，调用 briefing_stock_history_record 记录情绪快照（含 alert_triggers）\n" +
+  "10. 如果历史快照 >= 5 天（通过返回的 divergence 字段判断），检查情绪与股价背离：\n" +
+  "   - 情绪偏正面 + 股价跌 + alert 触发利空 → 预警捕捉到了尚未被充分定价的风险，重点提示\n" +
+  "   - 情绪偏正面 + 股价跌 + 无 alert 触发 → 可能遗漏了某个风险信号，建议用户检查是否需要补设预警\n" +
+  "   - 将背离分析作为单独板块呈现\n" +
+  "11. 不要主动给出买入/卖出/加仓/减仓建议，只提供风险信息\n\n" +
   "用中文回复。",
   {
     token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
@@ -826,6 +841,9 @@ server.tool(
   async ({ token, ticker, limit }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    // Expire stale alerts before processing
+    expireStaleAlerts(realToken!);
 
     const { articles, focus } = loadStockArticles(realToken!, ticker);
 
@@ -851,15 +869,35 @@ server.tool(
       return item ? `${item.label}（${item.description}）` : id;
     });
 
-    // If a specific ticker is requested, include history + divergence info
+    // If a specific ticker is requested, include history + divergence + alerts
     let divergence = undefined;
     let historySnapshots = undefined;
+    let stockAlerts = undefined;
+    let globalAlerts = undefined;
+    let expiringAlerts = undefined;
+    let noisyAlerts = undefined;
+
     if (ticker) {
-      const snapshots = getSnapshots(realToken!, ticker.toUpperCase(), 7);
+      const upperTicker = ticker.toUpperCase();
+      const snapshots = getSnapshots(realToken!, upperTicker, 7);
       if (snapshots.length > 0) {
         historySnapshots = snapshots;
         divergence = detectDivergence(snapshots);
       }
+
+      // Load active alerts for this ticker
+      const alerts = getActiveAlertsForTicker(realToken!, upperTicker);
+      if (alerts.stock_alerts.length > 0) stockAlerts = alerts.stock_alerts;
+      if (alerts.global_alerts.length > 0) globalAlerts = alerts.global_alerts;
+
+      // Near-expiry and noisy alert warnings
+      const expiring = getExpiringAlerts(realToken!);
+      const tickerExpiring = expiring.filter((e) => e.ticker === upperTicker);
+      if (tickerExpiring.length > 0) expiringAlerts = tickerExpiring;
+
+      const noisy = getNoisyAlerts(realToken!);
+      const tickerNoisy = noisy.filter((e) => e.ticker === upperTicker);
+      if (tickerNoisy.length > 0) noisyAlerts = tickerNoisy;
     }
 
     return {
@@ -873,6 +911,10 @@ server.tool(
           focus: focus || [],
           focus_labels: focusLabels || [],
           articles: limited,
+          stock_alerts: stockAlerts,
+          global_alerts: globalAlerts,
+          expiring_alerts: expiringAlerts,
+          noisy_alerts: noisyAlerts,
           history: historySnapshots,
           divergence,
         }),
@@ -900,10 +942,15 @@ server.tool(
       strong_bearish: z.number().int(),
     }).describe("五档情绪分布"),
     key_events: z.array(z.string()).describe("🟢🟢 或 🔴🔴 级别的重大消息摘要"),
+    alert_triggers: z.array(z.object({
+      alert_id: z.string(),
+      description: z.string(),
+      headline: z.string(),
+    })).optional().describe("本次分析中触发的预警列表"),
     close_price: z.number().optional().describe("当日收盘价（如果 Claude 通过 web search 获取到）"),
     price_change_pct: z.number().optional().describe("当日涨跌幅 %（如果 Claude 通过 web search 获取到）"),
   },
-  async ({ token, ticker, sentiment_score, article_count, breakdown, key_events, close_price, price_change_pct }) => {
+  async ({ token, ticker, sentiment_score, article_count, breakdown, key_events, alert_triggers, close_price, price_change_pct }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
 
@@ -933,12 +980,20 @@ server.tool(
       article_count,
       breakdown: breakdown as SentimentBreakdown,
       key_events,
+      alert_triggers: alert_triggers as AlertTriggerRecord[] | undefined,
       close_price: finalClosePrice,
       price_change_pct: finalChangePct,
       price_source: priceSource,
     };
 
     recordSnapshot(realToken!, upperTicker, snapshot);
+
+    // Record each alert trigger in the watchlist
+    if (alert_triggers) {
+      for (const trigger of alert_triggers) {
+        recordAlertTrigger(realToken!, trigger.alert_id);
+      }
+    }
 
     return {
       content: [{
@@ -1002,6 +1057,245 @@ server.tool(
           instructions: divergence.detected
             ? "检测到情绪与股价背离，请分析可能原因并作为单独板块呈现给用户。"
             : undefined,
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock Alert Set ────────────────────────────────────
+
+server.tool(
+  "briefing_stock_alert_set",
+  "批量创建预警。用户贴入分析师报告后由 Claude 提取关注点并调用此工具。\n" +
+  "也可手动创建：「帮我设一个 AAPL 的预警，关注造车项目是否取消」。\n" +
+  "每只股票最多 10 条活跃预警。不传 ticker 则创建通用预警（跨股票/宏观事件）。\n\n" +
+  "如果用户提供了分析师报告，请先提取关注点，呈现给用户确认后再调用此工具。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    ticker: z.string().optional().describe("股票代码。不填则创建通用预警。"),
+    alerts: z.array(z.object({
+      description: z.string().describe("自然语言描述的监控条件"),
+      keywords: z.array(z.string()).describe("辅助关键词（3-8个，用于初筛）"),
+      expires_in_months: z.number().optional().describe("监控几个月（默认6）"),
+      sensitivity: z.enum(["loose", "normal", "strict"]).optional().describe("匹配松紧度（默认normal）"),
+      source_report: z.string().optional().describe("预警来源标记（如 'Morgan Stanley 2026-03'）"),
+    })).describe("要创建的预警列表"),
+    scope: z.object({
+      markets: z.array(z.string()).optional(),
+      sectors: z.array(z.string()).optional(),
+      tickers: z.array(z.string()).optional(),
+    }).optional().describe("通用预警的影响范围（仅不传 ticker 时使用）"),
+  },
+  async ({ token, ticker, alerts: alertInputs, scope }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    // Global alert
+    if (!ticker) {
+      const inputs: GlobalAlertInput[] = alertInputs.map((a) => ({
+        ...a,
+        scope: {
+          markets: scope?.markets ?? [],
+          sectors: scope?.sectors ?? [],
+          tickers: scope?.tickers ?? [],
+        },
+      }));
+      const created = setGlobalAlerts(realToken!, inputs);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "success",
+            type: "global",
+            created: created.length,
+            alerts: created,
+            message: `已创建 ${created.length} 条通用预警。`,
+          }),
+        }],
+      };
+    }
+
+    // Per-ticker alert
+    const upperTicker = ticker.toUpperCase();
+    const { alerts: created, error: alertError } = setAlerts(realToken!, upperTicker, alertInputs as AlertInput[]);
+    if (alertError) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ status: "error", ticker: upperTicker, message: alertError }),
+        }],
+      };
+    }
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          type: "stock",
+          ticker: upperTicker,
+          created: created.length,
+          alerts: created,
+          message: `已为 ${upperTicker} 创建 ${created.length} 条预警。`,
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock Alert List ──────────────────────────────────
+
+server.tool(
+  "briefing_stock_alert_list",
+  "查看预警列表。用户说「我设了哪些预警」「AAPL 的预警」等时调用。\n" +
+  "返回每条预警的状态、触发次数、剩余时间。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    ticker: z.string().optional().describe("只看某只股票的预警（不填则返回全部）"),
+    status: z.enum(["active", "all"]).default("active").describe("状态过滤：active=仅活跃/已触发，all=含过期和已关闭"),
+  },
+  async ({ token, ticker, status }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    expireStaleAlerts(realToken!);
+    const upperTicker = ticker?.toUpperCase();
+    const { ticker_alerts, global_alerts } = listAlerts(realToken!, upperTicker, status as "active" | "all");
+
+    const tickerCount = Object.values(ticker_alerts).reduce((sum, arr) => sum + arr.length, 0);
+    const totalCount = tickerCount + global_alerts.length;
+
+    if (totalCount === 0) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "empty",
+            message: "没有预警。可以用 briefing_stock_alert_set 创建，或者贴入分析师报告让我帮你提取关注点。",
+          }),
+        }],
+      };
+    }
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          total: totalCount,
+          ticker_alerts,
+          global_alerts,
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock Alert Update ────────────────────────────────
+
+server.tool(
+  "briefing_stock_alert_update",
+  "修改预警的松紧度、时间窗口、描述、关键词。\n" +
+  "用户说「那条预警改成 strict」「延长 3 个月」「加个关键词」等时调用。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    alert_id: z.string().describe("预警ID，如 alert_aapl_001 或 galert_001"),
+    sensitivity: z.enum(["loose", "normal", "strict"]).optional().describe("修改匹配松紧度"),
+    extend_months: z.number().optional().describe("延长过期时间（月数）"),
+    add_keywords: z.array(z.string()).optional().describe("添加关键词"),
+    remove_keywords: z.array(z.string()).optional().describe("移除关键词"),
+    description: z.string().optional().describe("替换描述"),
+    status: z.enum(["dismissed"]).optional().describe("手动关闭"),
+  },
+  async ({ token, alert_id, sensitivity, extend_months, add_keywords, remove_keywords, description, status }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    const updated = updateAlert(realToken!, alert_id, {
+      sensitivity: sensitivity as any,
+      extend_months,
+      add_keywords,
+      remove_keywords,
+      description,
+      status: status as any,
+    });
+
+    if (!updated) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ status: "not_found", alert_id, message: `未找到预警 ${alert_id}。` }),
+        }],
+      };
+    }
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          alert: updated,
+          message: `预警 ${alert_id} 已更新。`,
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock Alert Dismiss ───────────────────────────────
+
+server.tool(
+  "briefing_stock_alert_dismiss",
+  "关闭一条或多条预警。用户说「第 3 条关了吧」「关掉那个预警」等时调用。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    alert_ids: z.array(z.string()).describe("要关闭的预警ID列表"),
+  },
+  async ({ token, alert_ids }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    const dismissed = dismissAlerts(realToken!, alert_ids);
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          dismissed,
+          message: dismissed.length > 0
+            ? `已关闭 ${dismissed.length} 条预警：${dismissed.join("、")}。`
+            : "没有找到需要关闭的预警。",
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock Alert Trigger ───────────────────────────────
+
+server.tool(
+  "briefing_stock_alert_trigger",
+  "记录预警触发。在 briefing_stock_digest 分析过程中发现新闻命中 alert 时调用。\n" +
+  "会更新预警的 triggered_count 和 last_triggered_at。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    alert_ids: z.array(z.string()).describe("被触发的预警ID列表"),
+  },
+  async ({ token, alert_ids }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    for (const id of alert_ids) {
+      recordAlertTrigger(realToken!, id);
+    }
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          triggered: alert_ids,
+          message: `已记录 ${alert_ids.length} 条预警触发。`,
         }),
       }],
     };
