@@ -476,7 +476,7 @@ server.tool(
 // ── Tool: Watchlist Set ──────────────────────────────────────
 
 server.tool(
-  "briefing_watchlist_set",
+  "briefing_stock_watchlist_set",
   "添加或更新关注的股票。用户说「帮我关注苹果」「加一只股票」「我想跟踪 CBA」等时调用。\n" +
   "不填 focus 则按 market + sector 自动推荐侧重面，返回推荐结果让用户确认。\n" +
   "可选信源（optin_sources）需用户明确说「加上」才填入，添加前告知用户相应限制说明（optin_notices）。\n\n" +
@@ -521,7 +521,7 @@ server.tool(
           message: `已添加 ${ticker.toUpperCase()} (${name})。当前侧重面：${focusLabels.join("、")}。`,
           instructions: focus
             ? undefined
-            : "以上是根据 market + sector 自动推荐的侧重面，请告知用户并询问是否需要调整。如需调整，调用 briefing_watchlist_update_focus。",
+            : "以上是根据 market + sector 自动推荐的侧重面，请告知用户并询问是否需要调整。如需调整，调用 briefing_stock_watchlist_update_focus。",
         }),
       }],
     };
@@ -531,7 +531,7 @@ server.tool(
 // ── Tool: Watchlist Get ──────────────────────────────────────
 
 server.tool(
-  "briefing_watchlist_get",
+  "briefing_stock_watchlist_get",
   "查看关注的股票列表及每只股票的侧重面配置。用户说「我关注了哪些股票」「看看我的 watchlist」等时调用。",
   { token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。") },
   async ({ token }) => {
@@ -547,7 +547,7 @@ server.tool(
           type: "text" as const,
           text: JSON.stringify({
             status: "empty",
-            message: "还没有关注任何股票。用 briefing_watchlist_set 添加。",
+            message: "还没有关注任何股票。用 briefing_stock_watchlist_set 添加。",
           }),
         }],
       };
@@ -579,7 +579,7 @@ server.tool(
 // ── Tool: Watchlist Remove ───────────────────────────────────
 
 server.tool(
-  "briefing_watchlist_remove",
+  "briefing_stock_watchlist_remove",
   "从关注列表中移除股票。用户说「不看 AAPL 了」「把 CBA 从 watchlist 删掉」等时调用。",
   {
     token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
@@ -606,7 +606,7 @@ server.tool(
 // ── Tool: Watchlist Update Focus ─────────────────────────────
 
 server.tool(
-  "briefing_watchlist_update_focus",
+  "briefing_stock_watchlist_update_focus",
   "调整某只股票的关注侧重面。用户说「AAPL 不看供应链了」「CBA 加上分析师评级」等时调用。\n" +
   "add_focus 和 remove_focus 可以同时传，都是侧重面ID列表。\n" +
   "可用ID：executive_trades / earnings / product_launch / competitor_share / regulatory / " +
@@ -631,7 +631,7 @@ server.tool(
           text: JSON.stringify({
             status: "not_found",
             ticker: ticker.toUpperCase(),
-            message: `未找到 ${ticker.toUpperCase()}，请先用 briefing_watchlist_set 添加。`,
+            message: `未找到 ${ticker.toUpperCase()}，请先用 briefing_stock_watchlist_set 添加。`,
           }),
         }],
       };
@@ -660,7 +660,7 @@ server.tool(
 // ── Tool: Watchlist Custom Sources ────────────────────────────
 
 server.tool(
-  "briefing_watchlist_custom_sources",
+  "briefing_stock_watchlist_custom_sources",
   "管理某只股票的自定义信源（RSS）。用户说「给 AAPL 加一个 RSS 源」「AAPL 删掉那个自定义源」「看看 AAPL 的自定义信源」等时调用。\n" +
   "add_urls 添加 RSS 源，remove_urls 按 URL 移除。两者都不传则仅查看当前自定义信源列表。\n" +
   "URL 支持 {ticker}、{company} 占位符，抓取时自动替换。",
@@ -687,7 +687,7 @@ server.tool(
             text: JSON.stringify({
               status: "not_found",
               ticker: upperTicker,
-              message: `未找到 ${upperTicker}，请先用 briefing_watchlist_set 添加。`,
+              message: `未找到 ${upperTicker}，请先用 briefing_stock_watchlist_set 添加。`,
             }),
           }],
         };
@@ -719,7 +719,7 @@ server.tool(
           text: JSON.stringify({
             status: "not_found",
             ticker: upperTicker,
-            message: `未找到 ${upperTicker}，请先用 briefing_watchlist_set 添加。`,
+            message: `未找到 ${upperTicker}，请先用 briefing_stock_watchlist_set 添加。`,
           }),
         }],
       };
@@ -762,7 +762,7 @@ server.tool(
           type: "text" as const,
           text: JSON.stringify({
             status: "empty",
-            message: "还没有关注任何股票。请先用 briefing_watchlist_set 添加。",
+            message: "还没有关注任何股票。请先用 briefing_stock_watchlist_set 添加。",
           }),
         }],
       };
@@ -906,7 +906,7 @@ server.prompt("daily-briefing", "看看今天有什么值得关注的（含股�
           "看看今天有什么值得关注的新闻。\n\n" +
           "流程：\n" +
           "1. 先抓取新闻（briefing_fetch_articles），根据兴趣偏好筛选呈现\n" +
-          "2. 如果我有关注的股票（briefing_watchlist_get 检查），\n" +
+          "2. 如果我有关注的股票（briefing_stock_watchlist_get 检查），\n" +
           "   接着抓取股票新闻（briefing_stock_fetch）并分析（briefing_stock_digest），\n" +
           "   在新闻简报后追加「📊 关注股票动态」板块\n" +
           "3. 如果没有 watchlist 则跳过股票部分",

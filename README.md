@@ -261,11 +261,11 @@ Claude Desktop
 | `briefing_log_interaction` | 记录阅读/讨论/收藏 |
 | `briefing_interaction_summary` | 兴趣趋势摘要 |
 | `briefing_view_log` | 查看阅读记录 |
-| `briefing_watchlist_set` | 添加/更新关注股票，自动推荐侧重面 |
-| `briefing_watchlist_get` | 查看关注列表及侧重面配置 |
-| `briefing_watchlist_remove` | 移除关注股票 |
-| `briefing_watchlist_update_focus` | 调整某只股票的关注侧重面 |
-| `briefing_watchlist_custom_sources` | 管理某只股票的自定义 RSS 信源 |
+| `briefing_stock_watchlist_set` | 添加/更新关注股票，自动推荐侧重面 |
+| `briefing_stock_watchlist_get` | 查看关注列表及侧重面配置 |
+| `briefing_stock_watchlist_remove` | 移除关注股票 |
+| `briefing_stock_watchlist_update_focus` | 调整某只股票的关注侧重面 |
+| `briefing_stock_watchlist_custom_sources` | 管理某只股票的自定义 RSS 信源 |
 | `briefing_stock_fetch` | 抓取关注股票的最新新闻 |
 | `briefing_stock_digest` | 获取股票新闻列表，供 AI 做利好/利空分析 |
 

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Personalized news briefing + stock watchlist — curated news from RSS, Reddit, and Hacker News based on your interests, plus per-stock sentiment analysis (bullish/bearish) with customizable focus areas. Supports US and ASX markets.",
   "author": {
     "name": "Amy"
@@ -78,23 +78,23 @@
       "description": "View recent reading history"
     },
     {
-      "name": "briefing_watchlist_set",
+      "name": "briefing_stock_watchlist_set",
       "description": "Add a stock to your watchlist with auto-recommended focus areas"
     },
     {
-      "name": "briefing_watchlist_get",
+      "name": "briefing_stock_watchlist_get",
       "description": "View your stock watchlist and focus configurations"
     },
     {
-      "name": "briefing_watchlist_remove",
+      "name": "briefing_stock_watchlist_remove",
       "description": "Remove a stock from your watchlist"
     },
     {
-      "name": "briefing_watchlist_update_focus",
+      "name": "briefing_stock_watchlist_update_focus",
       "description": "Adjust focus areas (e.g. earnings, regulatory) for a stock"
     },
     {
-      "name": "briefing_watchlist_custom_sources",
+      "name": "briefing_stock_watchlist_custom_sources",
       "description": "Add or remove custom RSS feeds for a specific stock"
     },
     {
