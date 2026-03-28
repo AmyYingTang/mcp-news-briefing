@@ -11,7 +11,7 @@
     "type": "git",
     "url": "https://github.com/AmyYingTang/mcp-news-briefing.git"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "server": {
     "type": "node",
     "entry_point": "dist/server.js",
