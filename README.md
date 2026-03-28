@@ -113,6 +113,9 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 | "CBA 加上分析师评级" | 给 CBA.AX 增加关注维度 |
 | "看看我的股票" | 抓取并分析所有关注股票的最新消息 |
 | "不看 AAPL 了" | 从 watchlist 移除 |
+| "给 AAPL 加一个 RSS 源：https://example.com/feed" | 添加自定义信源 |
+| "AAPL 的自定义信源有哪些" | 查看自定义信源列表 |
+| "把那个 example.com 的源删掉" | 移除自定义信源 |
 
 **侧重面（Focus）：**
 
@@ -137,6 +140,7 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 
 - 🟢 **默认启用** — 公开免费信源（Yahoo Finance、Google News、Nasdaq、CNBC 等），添加股票时自动挂载
 - 🟡 **可选信源** — 有使用条款的信源（SEC EDGAR、Seeking Alpha、ASX Announcements 等），需你确认后启用
+- 🔵 **自定义信源** — 用户自己添加的 RSS 源，每只股票独立配置，URL 支持 `{ticker}`/`{company}` 占位符
 - 澳股信源不可用时自动降级到 Google News AU 搜索
 
 股票动态也会自动集成到每日简报中——如果 watchlist 不为空，每日简报末尾会追加「关注股票动态」板块。
@@ -261,6 +265,7 @@ Claude Desktop
 | `briefing_watchlist_get` | 查看关注列表及侧重面配置 |
 | `briefing_watchlist_remove` | 移除关注股票 |
 | `briefing_watchlist_update_focus` | 调整某只股票的关注侧重面 |
+| `briefing_watchlist_custom_sources` | 管理某只股票的自定义 RSS 信源 |
 | `briefing_stock_fetch` | 抓取关注股票的最新新闻 |
 | `briefing_stock_digest` | 获取股票新闻列表，供 AI 做利好/利空分析 |
 
@@ -281,6 +286,7 @@ Claude Desktop
 - [x] .mcpb Desktop Extension 打包
 - [x] 股票关注列表（Watchlist）— 美股 / 澳股，侧重面推荐，利好利空分析
 - [x] 默认身份（注册后无需每次指定用户名，多账号可切换）
+- [x] Watchlist 自定义信源（per-ticker RSS，支持占位符）
 - [ ] Anthropic Extension Directory 提交
 - [ ] OAuth 2.1（远程部署场景）
 - [ ] Twitter/X 数据源

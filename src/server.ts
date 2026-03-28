@@ -20,7 +20,7 @@ import { getSources, setSourcesFromCategories, addCustomSources } from "./user-s
 import { fetchAll, loadTodayArticles, loadArticlesByDate, type Article } from "./sources.js";
 import { logInteraction, getInteractionSummary, getFullLog } from "./interaction-log.js";
 import { log } from "./storage.js";
-import { getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, FOCUS_CATALOG, type Market } from "./watchlist.js";
+import { getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, updateCustomSources, FOCUS_CATALOG, type Market, type CustomSource } from "./watchlist.js";
 import { fetchStockNews, loadStockArticles } from "./stock-sources.js";
 
 // ── Token validation helper ──────────────────────────────────
@@ -651,6 +651,89 @@ server.tool(
           focus: updated,
           focus_labels: focusLabels,
           message: `${ticker.toUpperCase()} 侧重面已更新：${focusLabels.join("、")}。`,
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Watchlist Custom Sources ────────────────────────────
+
+server.tool(
+  "briefing_watchlist_custom_sources",
+  "管理某只股票的自定义信源（RSS）。用户说「给 AAPL 加一个 RSS 源」「AAPL 删掉那个自定义源」「看看 AAPL 的自定义信源」等时调用。\n" +
+  "add_urls 添加 RSS 源，remove_urls 按 URL 移除。两者都不传则仅查看当前自定义信源列表。\n" +
+  "URL 支持 {ticker}、{company} 占位符，抓取时自动替换。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    ticker: z.string().describe("股票代码，如 AAPL 或 CBA.AX"),
+    add_urls: z.array(z.string()).optional().describe("要添加的 RSS 源 URL 列表"),
+    remove_urls: z.array(z.string()).optional().describe("要移除的 RSS 源 URL 列表"),
+  },
+  async ({ token, ticker, add_urls, remove_urls }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    const upperTicker = ticker.toUpperCase();
+
+    // View-only mode
+    if (!add_urls && !remove_urls) {
+      const wl = getWatchlist(realToken!);
+      const entry = wl[upperTicker];
+      if (!entry) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              status: "not_found",
+              ticker: upperTicker,
+              message: `未找到 ${upperTicker}，请先用 briefing_watchlist_set 添加。`,
+            }),
+          }],
+        };
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "success",
+            ticker: upperTicker,
+            custom_sources: entry.custom_sources || [],
+            count: (entry.custom_sources || []).length,
+            message: (entry.custom_sources || []).length === 0
+              ? `${upperTicker} 暂无自定义信源。`
+              : `${upperTicker} 有 ${entry.custom_sources.length} 个自定义信源。`,
+          }),
+        }],
+      };
+    }
+
+    // Add / Remove
+    const addSources: CustomSource[] | undefined = add_urls?.map((url) => ({ type: "rss" as const, url }));
+    const updated = updateCustomSources(realToken!, upperTicker, addSources, remove_urls);
+
+    if (updated === null) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "not_found",
+            ticker: upperTicker,
+            message: `未找到 ${upperTicker}，请先用 briefing_watchlist_set 添加。`,
+          }),
+        }],
+      };
+    }
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          ticker: upperTicker,
+          custom_sources: updated,
+          count: updated.length,
+          message: `${upperTicker} 自定义信源已更新，当前 ${updated.length} 个。`,
         }),
       }],
     };

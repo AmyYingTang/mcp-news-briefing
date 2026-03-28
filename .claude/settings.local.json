@@ -4,7 +4,8 @@
       "Bash(npx tsc:*)",
       "Bash(npm run:*)",
       "Bash(node -e \":*)",
-      "Bash(grep -E \"\\\\.\\(py|ts|js|json\\)$\")"
+      "Bash(grep -E \"\\\\.\\(py|ts|js|json\\)$\")",
+      "Bash(find /Users/yingtang/Documents/git/mcp-news-briefing/src -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))"
     ]
   }
 }

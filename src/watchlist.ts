@@ -302,6 +302,45 @@ export function updateFocus(
 }
 
 /**
+ * Add or remove custom RSS sources for a specific ticker.
+ * Returns the updated custom_sources list, or null if ticker not found.
+ */
+export function updateCustomSources(
+  token: string,
+  ticker: string,
+  addSources?: CustomSource[],
+  removeSources?: string[],
+): CustomSource[] | null {
+  const wl = getWatchlist(token);
+  const entry = wl[ticker];
+  if (!entry) return null;
+
+  const sources = entry.custom_sources || [];
+  const urlSet = new Set(sources.map((s) => s.url));
+
+  // Add new sources (deduplicate by URL)
+  if (addSources) {
+    for (const cs of addSources) {
+      if (!urlSet.has(cs.url)) {
+        sources.push(cs);
+        urlSet.add(cs.url);
+      }
+    }
+  }
+
+  // Remove by URL
+  if (removeSources) {
+    const removeSet = new Set(removeSources);
+    entry.custom_sources = sources.filter((s) => !removeSet.has(s.url));
+  } else {
+    entry.custom_sources = sources;
+  }
+
+  writeJSON(watchlistPath(token), wl);
+  return entry.custom_sources;
+}
+
+/**
  * Get the resolved source URLs for a specific ticker entry.
  * Replaces {ticker}, {company}, {sector}, {market_region} placeholders.
  */
@@ -312,6 +351,8 @@ export interface ResolvedUrls {
   filtered_urls: { name: string; url: string }[];
   /** Opt-in sources (user explicitly enabled) */
   optin_urls: { name: string; url: string }[];
+  /** User-defined custom RSS sources */
+  custom_urls: { name: string; url: string }[];
 }
 
 export function resolveSourceUrls(
@@ -319,7 +360,7 @@ export function resolveSourceUrls(
   entry: WatchlistEntry,
 ): ResolvedUrls {
   const catalog = STOCK_SOURCE_CATALOG[entry.market];
-  if (!catalog) return { per_ticker_urls: [], filtered_urls: [], optin_urls: [] };
+  if (!catalog) return { per_ticker_urls: [], filtered_urls: [], optin_urls: [], custom_urls: [] };
 
   const vars: Record<string, string> = {
     "{ticker}": ticker.replace(".AX", ""),
@@ -355,5 +396,11 @@ export function resolveSourceUrls(
     .filter((s) => enabledOptins.has(s.name) && s.url)
     .map((s) => ({ name: s.name, url: expand(s.url!) }));
 
-  return { per_ticker_urls, filtered_urls, optin_urls };
+  // User-defined custom RSS sources (URLs may contain {ticker}/{company} placeholders)
+  const custom_urls = (entry.custom_sources || []).map((cs, i) => ({
+    name: `custom-${i + 1}`,
+    url: expand(cs.url),
+  }));
+
+  return { per_ticker_urls, filtered_urls, optin_urls, custom_urls };
 }

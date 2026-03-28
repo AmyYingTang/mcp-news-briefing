@@ -199,7 +199,7 @@ async function fetchForTicker(
     return [];
   }
 
-  const { per_ticker_urls, filtered_urls, optin_urls } = resolveSourceUrls(ticker, entry);
+  const { per_ticker_urls, filtered_urls, optin_urls, custom_urls } = resolveSourceUrls(ticker, entry);
   const allArticles: Article[] = [];
 
   // 1. Per-ticker sources (direct fetch, URL already contains ticker)
@@ -223,12 +223,18 @@ async function fetchForTicker(
   // 5. HN
   const hnPromise = fetchStockHN(ticker, entry.name);
 
+  // 6. User-defined custom RSS sources
+  const customPromises = custom_urls.map((s) =>
+    fetchRssUrl(s.url, `${ticker}:${s.name}`, hoursBack),
+  );
+
   const results = await Promise.allSettled([
     ...rssPromises,
     ...optinPromises,
     ...filteredPromises,
     redditPromise,
     hnPromise,
+    ...customPromises,
   ]);
 
   for (const result of results) {
