@@ -116,6 +116,7 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 | "给 AAPL 加一个 RSS 源：https://example.com/feed" | 添加自定义信源 |
 | "AAPL 的自定义信源有哪些" | 查看自定义信源列表 |
 | "把那个 example.com 的源删掉" | 移除自定义信源 |
+| "AAPL 最近一周情况怎么样" | 查看历史情绪趋势 + 股价对比 + 背离检测 |
 
 **侧重面（Focus）：**
 
@@ -140,6 +141,8 @@ Claude会根据你的偏好推荐相关的RSS、Reddit板块等，你确认后�
 
 - 🟢 **默认启用** — 公开免费信源（Yahoo Finance、Google News、Nasdaq、CNBC 等），添加股票时自动挂载
 - 🟡 **可选信源** — 有使用条款的信源（SEC EDGAR、Seeking Alpha、ASX Announcements 等），需你确认后启用
+  - **SEC EDGAR**（美股）：启用后自动查找 ticker→CIK 映射，抓取官方 filings（Form 4 高管增减持、8-K 重大事件、10-K/10-Q 财报等），按 filing type 标注关联侧重面
+  - **ASX Announcements**（澳股）：启用后抓取 ASX 公告 RSS，如果主信源不可用自动降级到 Google News AU 搜索
 - 🔵 **自定义信源** — 用户自己添加的 RSS 源，每只股票独立配置，URL 支持 `{ticker}`/`{company}` 占位符
 - 澳股信源不可用时自动降级到 Google News AU 搜索
 
@@ -268,6 +271,8 @@ Claude Desktop
 | `briefing_stock_watchlist_custom_sources` | 管理某只股票的自定义 RSS 信源 |
 | `briefing_stock_fetch` | 抓取关注股票的最新新闻 |
 | `briefing_stock_digest` | 获取股票新闻列表，供 AI 做利好/利空分析 |
+| `briefing_stock_history_record` | 记录每日情绪快照（分析后自动调用） |
+| `briefing_stock_history_get` | 查看历史情绪趋势 + 股价走势 + 背离检测 |
 
 ### 新用户完整流程（工具调用顺序）
 
@@ -287,11 +292,12 @@ Claude Desktop
 - [x] 股票关注列表（Watchlist）— 美股 / 澳股，侧重面推荐，利好利空分析
 - [x] 默认身份（注册后无需每次指定用户名，多账号可切换）
 - [x] Watchlist 自定义信源（per-ticker RSS，支持占位符）
+- [x] 市场信源自动匹配（SEC EDGAR CIK 查找 + ASX 公告 RSS 降级）
 - [ ] Anthropic Extension Directory 提交
 - [ ] OAuth 2.1（远程部署场景）
 - [ ] Twitter/X 数据源
+- [x] 股票历史情绪趋势 + 股价对比 + 背离检测
 - [ ] 偏好自动演进（根据阅读行为调整关注权重）
-- [ ] 股票历史情绪趋势（某只股票过去一周的情绪变化）
 
 ## License
 

@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import RssParser from "rss-parser";
-import { CACHE_DIR, readJSON, writeJSON, cleanupOldCache, log } from "./storage.js";
+import { CACHE_DIR, DATA_DIR, readJSON, writeJSON, cleanupOldCache, log } from "./storage.js";
 import { getWatchlist, resolveSourceUrls, STOCK_SOURCE_CATALOG, SHARED_SOURCES, type WatchlistEntry } from "./watchlist.js";
 import type { Article } from "./sources.js";
 
@@ -20,6 +20,137 @@ import type { Article } from "./sources.js";
 const CACHE_TTL_MINUTES = 30;
 const FETCH_TIMEOUT_MS = 12_000;
 const REDDIT_HEADERS = { "User-Agent": "AIDailyBriefing/2.0 (stock-sources)" };
+const SEC_HEADERS = { "User-Agent": "mcp-news-briefing contact@example.com" };
+
+// ── SEC EDGAR CIK lookup ────────────────────────────────────
+
+/** Ticker → CIK mapping, cached in memory + on disk */
+let cikMap: Record<string, number> | null = null;
+const CIK_CACHE_PATH = join(DATA_DIR, "cache", "sec_cik_map.json");
+const CIK_CACHE_MAX_AGE_MS = 7 * 24 * 3600 * 1000; // refresh weekly
+
+interface SecTickerEntry {
+  cik_str: number;
+  ticker: string;
+  title: string;
+}
+
+/**
+ * Load ticker→CIK mapping. Downloads from SEC if not cached or stale.
+ */
+async function loadCikMap(): Promise<Record<string, number>> {
+  if (cikMap) return cikMap;
+
+  // Try disk cache
+  if (existsSync(CIK_CACHE_PATH)) {
+    try {
+      const stat = (await import("node:fs")).statSync(CIK_CACHE_PATH);
+      if (Date.now() - stat.mtimeMs < CIK_CACHE_MAX_AGE_MS) {
+        cikMap = readJSON<Record<string, number>>(CIK_CACHE_PATH, {});
+        if (Object.keys(cikMap!).length > 0) {
+          log(`📦 SEC CIK cache hit (${Object.keys(cikMap!).length} tickers)`);
+          return cikMap!;
+        }
+      }
+    } catch { /* stale or corrupt, re-download */ }
+  }
+
+  // Download from SEC
+  try {
+    log("📡 Downloading SEC EDGAR ticker→CIK mapping...");
+    const resp = await fetch("https://www.sec.gov/files/company_tickers.json", {
+      headers: SEC_HEADERS,
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = (await resp.json()) as Record<string, SecTickerEntry>;
+    const map: Record<string, number> = {};
+    for (const entry of Object.values(data)) {
+      map[entry.ticker.toUpperCase()] = entry.cik_str;
+    }
+    cikMap = map;
+    writeJSON(CIK_CACHE_PATH, map);
+    log(`💾 SEC CIK map cached (${Object.keys(map).length} tickers)`);
+    return map;
+  } catch (e) {
+    log(`  ⚠️  SEC CIK download failed: ${e instanceof Error ? e.message : e}`);
+    cikMap = {};
+    return cikMap;
+  }
+}
+
+/** Map SEC filing type to focus ID */
+function filingTypeToFocus(formType: string): string | undefined {
+  const t = formType.toUpperCase().trim();
+  if (t === "4" || t === "3" || t === "5") return "executive_trades";
+  if (t.startsWith("8-K")) return "earnings"; // 8-K covers material events
+  if (t.startsWith("10-K") || t.startsWith("10-Q") || t === "6-K") return "earnings";
+  if (t.startsWith("SC 13") || t.startsWith("13D") || t.startsWith("13G")) return "ma_partnership";
+  if (t.startsWith("S-") || t === "424B") return "buyback_dividend";
+  return undefined;
+}
+
+/**
+ * Fetch recent filings from SEC EDGAR for a ticker.
+ */
+async function fetchSecEdgar(
+  ticker: string,
+  hoursBack: number,
+): Promise<Article[]> {
+  const map = await loadCikMap();
+  const cik = map[ticker.toUpperCase()];
+  if (!cik) {
+    log(`  ⚠️  SEC EDGAR: no CIK found for ${ticker}`);
+    return [];
+  }
+
+  const padded = String(cik).padStart(10, "0");
+  const filingUrl = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${padded}&type=&dateb=&owner=include&count=20&search_text=&output=atom`;
+
+  const cutoff = new Date(Date.now() - hoursBack * 3600 * 1000);
+  const articles: Article[] = [];
+
+  try {
+    const resp = await fetch(filingUrl, {
+      headers: SEC_HEADERS,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    const text = await resp.text();
+
+    // Parse Atom feed entries via regex (simple, avoids extra dependency)
+    const entryPattern = /<entry>([\s\S]*?)<\/entry>/g;
+    let match;
+    while ((match = entryPattern.exec(text)) !== null) {
+      const entry = match[1];
+      const title = entry.match(/<title[^>]*>([\s\S]*?)<\/title>/)?.[1]?.trim() || "";
+      const link = entry.match(/<link[^>]*href="([^"]+)"/)?.[1] || "";
+      const updated = entry.match(/<updated>([\s\S]*?)<\/updated>/)?.[1]?.trim() || "";
+      const summary = entry.match(/<summary[^>]*>([\s\S]*?)<\/summary>/)?.[1]?.replace(/<[^>]+>/g, "").trim().slice(0, 300) || "";
+
+      const pubDate = updated ? new Date(updated) : null;
+      if (pubDate && pubDate < cutoff) continue;
+
+      // Extract form type from title (e.g. "4 - ..." or "8-K - ...")
+      const formType = title.match(/^([^\s-]+)/)?.[1] || "";
+      const focusTag = filingTypeToFocus(formType);
+
+      articles.push({
+        title: `[SEC ${formType}] ${title}`,
+        url: link.startsWith("http") ? link : `https://www.sec.gov${link}`,
+        source: `stock-sec:${ticker}:EDGAR`,
+        summary: focusTag ? `[focus:${focusTag}] ${summary}` : summary,
+        published: pubDate?.toISOString() || "",
+        score: 0,
+        comments: 0,
+      });
+    }
+
+    log(`  📋 SEC EDGAR [${ticker}]: ${articles.length} filings`);
+  } catch (e) {
+    log(`  ⚠️  SEC EDGAR [${ticker}]: ${e instanceof Error ? e.message : e}`);
+  }
+
+  return articles;
+}
 
 // ── RSS fetching (per-ticker) ───────────────────────────────
 
@@ -228,6 +359,10 @@ async function fetchForTicker(
     fetchRssUrl(s.url, `${ticker}:${s.name}`, hoursBack),
   );
 
+  // 7. SEC EDGAR (special handling — CIK lookup, not URL-based)
+  const secEnabled = entry.optin_sources.includes("SEC EDGAR") && entry.market === "US";
+  const secPromise = secEnabled ? fetchSecEdgar(ticker, hoursBack) : Promise.resolve([]);
+
   const results = await Promise.allSettled([
     ...rssPromises,
     ...optinPromises,
@@ -235,6 +370,7 @@ async function fetchForTicker(
     redditPromise,
     hnPromise,
     ...customPromises,
+    secPromise,
   ]);
 
   for (const result of results) {

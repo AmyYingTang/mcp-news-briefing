@@ -22,6 +22,10 @@ import { logInteraction, getInteractionSummary, getFullLog } from "./interaction
 import { log } from "./storage.js";
 import { getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, updateCustomSources, FOCUS_CATALOG, type Market, type CustomSource } from "./watchlist.js";
 import { fetchStockNews, loadStockArticles } from "./stock-sources.js";
+import {
+  recordSnapshot, getSnapshots, fetchClosePrice, detectDivergence,
+  computeSentimentLabel, type SentimentBreakdown, type SentimentSnapshot,
+} from "./stock-history.js";
 
 // ── Token validation helper ──────────────────────────────────
 
@@ -807,7 +811,12 @@ server.tool(
   "2. 每条新闻标注：🟢🟢 强利好 | 🟢 弱利好 | ⚪ 中性 | 🔴 弱利空 | 🔴🔴 强利空\n" +
   "3. 跟侧重面无关但重大的消息也要标注\n" +
   "4. 对🟢🟢和🔴🔴级别的消息，用 web search 查证官方来源\n" +
-  "5. 最后给一句整体情绪总结\n\n" +
+  "5. 最后给一句整体情绪总结\n" +
+  "6. 分析完成后，调用 briefing_stock_history_record 记录本次情绪快照（评分、五档分布、关键事件摘要）\n" +
+  "7. 如果该股票的历史快照 >= 5 天（通过返回的 divergence 字段判断），检查情绪与股价是否背离：\n" +
+  "   - 持续利好但股价下跌 → 分析原因（已被 price in？宏观风险？遗漏消息？）\n" +
+  "   - 持续利空但股价上涨 → 分析原因（超卖反弹？利空出尽？市场预期转变？）\n" +
+  "   - 将背离分析作为单独板块呈现\n\n" +
   "用中文回复。",
   {
     token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
@@ -842,6 +851,17 @@ server.tool(
       return item ? `${item.label}（${item.description}）` : id;
     });
 
+    // If a specific ticker is requested, include history + divergence info
+    let divergence = undefined;
+    let historySnapshots = undefined;
+    if (ticker) {
+      const snapshots = getSnapshots(realToken!, ticker.toUpperCase(), 7);
+      if (snapshots.length > 0) {
+        historySnapshots = snapshots;
+        divergence = detectDivergence(snapshots);
+      }
+    }
+
     return {
       content: [{
         type: "text" as const,
@@ -853,6 +873,135 @@ server.tool(
           focus: focus || [],
           focus_labels: focusLabels || [],
           articles: limited,
+          history: historySnapshots,
+          divergence,
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock History Record ───────────────────────────────
+
+server.tool(
+  "briefing_stock_history_record",
+  "记录某只股票的每日情绪快照。在 briefing_stock_digest 分析完成后自动调用。\n" +
+  "评分规则：🟢🟢=+2, 🟢=+1, ⚪=0, 🔴=-1, 🔴🔴=-2，sentiment_score = 加权平均值。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    ticker: z.string().describe("股票代码，如 AAPL 或 CBA.AX"),
+    sentiment_score: z.number().describe("加权平均情绪评分（-2 到 +2）"),
+    article_count: z.number().int().describe("本次分析的文章数量"),
+    breakdown: z.object({
+      strong_bullish: z.number().int(),
+      weak_bullish: z.number().int(),
+      neutral: z.number().int(),
+      weak_bearish: z.number().int(),
+      strong_bearish: z.number().int(),
+    }).describe("五档情绪分布"),
+    key_events: z.array(z.string()).describe("🟢🟢 或 🔴🔴 级别的重大消息摘要"),
+    close_price: z.number().optional().describe("当日收盘价（如果 Claude 通过 web search 获取到）"),
+    price_change_pct: z.number().optional().describe("当日涨跌幅 %（如果 Claude 通过 web search 获取到）"),
+  },
+  async ({ token, ticker, sentiment_score, article_count, breakdown, key_events, close_price, price_change_pct }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    const upperTicker = ticker.toUpperCase();
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Try to fetch close price from Yahoo if not provided by Claude
+    let finalClosePrice = close_price;
+    let finalChangePct = price_change_pct;
+    let priceSource: string | undefined;
+
+    if (finalClosePrice == null) {
+      const yahoo = await fetchClosePrice(upperTicker);
+      if (yahoo) {
+        finalClosePrice = yahoo.close;
+        finalChangePct = yahoo.changePct;
+        priceSource = "yahoo";
+      }
+    } else {
+      priceSource = "claude";
+    }
+
+    const snapshot: SentimentSnapshot = {
+      date: today,
+      sentiment_score: Math.round(sentiment_score * 100) / 100,
+      sentiment_label: computeSentimentLabel(sentiment_score),
+      article_count,
+      breakdown: breakdown as SentimentBreakdown,
+      key_events,
+      close_price: finalClosePrice,
+      price_change_pct: finalChangePct,
+      price_source: priceSource,
+    };
+
+    recordSnapshot(realToken!, upperTicker, snapshot);
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          ticker: upperTicker,
+          date: today,
+          snapshot,
+          message: `${upperTicker} ${today} 情绪快照已记录：${snapshot.sentiment_label}（${snapshot.sentiment_score}）` +
+            (finalClosePrice != null ? `，收盘价 ${finalClosePrice}（${finalChangePct! >= 0 ? "+" : ""}${finalChangePct}%）` : ""),
+        }),
+      }],
+    };
+  }
+);
+
+// ── Tool: Stock History Get ──────────────────────────────────
+
+server.tool(
+  "briefing_stock_history_get",
+  "查看某只股票的历史情绪趋势。用户说「AAPL 最近一周情况怎么样」「看看苹果的趋势」等时调用。\n" +
+  "返回每日情绪评分 + 收盘价 + 涨跌幅，以及背离检测结果。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    ticker: z.string().describe("股票代码，如 AAPL 或 CBA.AX"),
+    days: z.number().int().min(1).max(90).default(7).describe("查看最近几天（默认7，最大90）"),
+  },
+  async ({ token, ticker, days }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    const upperTicker = ticker.toUpperCase();
+    const snapshots = getSnapshots(realToken!, upperTicker, days);
+
+    if (snapshots.length === 0) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "empty",
+            ticker: upperTicker,
+            message: `${upperTicker} 还没有历史情绪数据。每次使用 briefing_stock_digest 分析后会自动记录。`,
+          }),
+        }],
+      };
+    }
+
+    const divergence = detectDivergence(snapshots);
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          ticker: upperTicker,
+          days_requested: days,
+          days_available: snapshots.length,
+          snapshots,
+          divergence,
+          instructions: divergence.detected
+            ? "检测到情绪与股价背离，请分析可能原因并作为单独板块呈现给用户。"
+            : undefined,
         }),
       }],
     };

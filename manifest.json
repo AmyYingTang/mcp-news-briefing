@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Personalized news briefing + stock watchlist — curated news from RSS, Reddit, and Hacker News based on your interests, plus per-stock sentiment analysis (bullish/bearish) with customizable focus areas. Supports US and ASX markets.",
   "author": {
     "name": "Amy"
@@ -104,6 +104,14 @@
     {
       "name": "briefing_stock_digest",
       "description": "Get stock news for bullish/bearish sentiment analysis"
+    },
+    {
+      "name": "briefing_stock_history_record",
+      "description": "Record daily sentiment snapshot after stock analysis"
+    },
+    {
+      "name": "briefing_stock_history_get",
+      "description": "View historical sentiment trends and price divergence for a stock"
     }
   ],
   "prompts": [
