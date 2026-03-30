@@ -229,7 +229,7 @@ Claude Desktop
 | `briefing_stock_alert_list` | 查看预警列表 + 触发统计 |
 | `briefing_stock_alert_update` | 修改预警松紧度、时间窗口、关键词 |
 | `briefing_stock_alert_dismiss` | 关闭预警 |
-| `briefing_stock_alert_trigger` | 记录预警触发（digest 分析时自动调用） |
+| `briefing_stock_alert_trigger` | 记录预警触发 + 事件级去重（digest 分析时自动调用） |
 
 ### 新用户完整流程（工具调用顺序）
 
@@ -255,6 +255,7 @@ Claude Desktop
 - [ ] Twitter/X 数据源
 - [x] 股票历史情绪趋势 + 股价对比 + 背离检测
 - [x] 股票预警（Alert）— 分析师报告提取、时效性监控、通用预警、风险提示优先
+- [x] 预警事件级去重 — 同一事件多天多源报道只触发一次，实质性进展自动识别
 - [ ] 预警推送通知（pending notification 写入 + 下次交互时呈现）
 - [ ] 偏好自动演进（根据阅读行为调整关注权重）
 

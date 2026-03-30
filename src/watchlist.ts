@@ -19,6 +19,18 @@ export interface CustomSource {
 export type AlertSensitivity = "loose" | "normal" | "strict";
 export type AlertStatus = "active" | "triggered" | "expired" | "dismissed";
 
+export interface EventSignature {
+  event_date: string;   // ISO date of the event itself (not the news publish date)
+  summary: string;      // One-line event summary for semantic dedup
+}
+
+export interface TriggerHistoryEntry {
+  triggered_at: string;            // ISO timestamp when Claude triggered the alert
+  event_signature: EventSignature;
+  source_urls: string[];           // Articles reporting this event (appended on dups)
+  is_update?: boolean;             // True if this is a material update to a prior event
+}
+
 export interface StockAlert {
   id: string;
   description: string;
@@ -30,6 +42,7 @@ export interface StockAlert {
   status: AlertStatus;
   triggered_count: number;
   last_triggered_at: string | null;
+  trigger_history: TriggerHistoryEntry[];
 }
 
 export interface AlertScope {
@@ -502,6 +515,7 @@ export function setAlerts(
       status: "active",
       triggered_count: 0,
       last_triggered_at: null,
+      trigger_history: [],
     };
     entry.alerts.push(alert);
     created.push(alert);
@@ -692,34 +706,141 @@ export function expireStaleAlerts(token: string): void {
 }
 
 /**
- * Record that an alert was triggered. Updates count and timestamp.
+ * Find an alert by ID across ticker alerts and global alerts.
+ * Returns the alert and a save function to persist changes.
  */
-export function recordAlertTrigger(
+function findAlertById(
   token: string,
   alertId: string,
-): void {
-  const now = new Date().toISOString();
-
+): { alert: StockAlert | GlobalAlert; save: () => void } | null {
   const wl = getWatchlist(token);
   for (const entry of Object.values(wl)) {
     if (!entry.alerts) continue;
     const alert = entry.alerts.find((a) => a.id === alertId);
     if (alert) {
-      alert.triggered_count += 1;
-      alert.last_triggered_at = now;
-      if (alert.status === "active") alert.status = "triggered";
-      writeJSON(watchlistPath(token), wl);
-      return;
+      return { alert, save: () => writeJSON(watchlistPath(token), wl) };
     }
   }
-
   const globals = getGlobalAlerts(token);
   const globalAlert = globals.find((a) => a.id === alertId);
   if (globalAlert) {
-    globalAlert.triggered_count += 1;
-    globalAlert.last_triggered_at = now;
-    if (globalAlert.status === "active") globalAlert.status = "triggered";
-    writeJSON(globalAlertsPath(token), globals);
+    return { alert: globalAlert, save: () => writeJSON(globalAlertsPath(token), globals) };
+  }
+  return null;
+}
+
+/** How many days apart two ISO date strings are (absolute). */
+function dateDiffDays(a: string, b: string): number {
+  const msPerDay = 86400 * 1000;
+  return Math.abs(
+    (new Date(a.slice(0, 10)).getTime() - new Date(b.slice(0, 10)).getTime()) / msPerDay,
+  );
+}
+
+export interface TriggerResult {
+  action: "new_trigger" | "duplicate_append" | "near_date_found";
+  alert_id: string;
+  /** Populated when action = "near_date_found": existing entries for Claude to compare. */
+  near_entries?: TriggerHistoryEntry[];
+}
+
+/**
+ * Record an alert trigger with event-level dedup.
+ *
+ * Flow:
+ * 1. Look up trigger_history for entries with event_date within ±3 days.
+ * 2. If no near-date entry exists → new trigger (write immediately).
+ * 3. If near-date entries exist → return them so Claude can do semantic comparison.
+ *    Claude then calls `confirmAlertTrigger` or `appendDuplicateSource`.
+ */
+export function recordAlertTrigger(
+  token: string,
+  alertId: string,
+  eventSignature: EventSignature,
+  sourceUrl: string,
+  isUpdate: boolean = false,
+): TriggerResult {
+  const found = findAlertById(token, alertId);
+  if (!found) return { action: "new_trigger", alert_id: alertId };
+
+  const { alert, save } = found;
+  // Ensure trigger_history exists (for alerts created before this feature)
+  if (!alert.trigger_history) alert.trigger_history = [];
+
+  // Date-level fast filter: find entries within ±3 days
+  const nearEntries = alert.trigger_history.filter(
+    (entry) => dateDiffDays(entry.event_signature.event_date, eventSignature.event_date) <= 3,
+  );
+
+  if (nearEntries.length > 0) {
+    // Return near-date entries for Claude to do semantic comparison
+    return { action: "near_date_found", alert_id: alertId, near_entries: nearEntries };
+  }
+
+  // No near-date match → new event, record immediately
+  const now = new Date().toISOString();
+  alert.trigger_history.push({
+    triggered_at: now,
+    event_signature: eventSignature,
+    source_urls: [sourceUrl],
+    is_update: isUpdate || undefined,
+  });
+  alert.triggered_count += 1;
+  alert.last_triggered_at = now;
+  if (alert.status === "active") alert.status = "triggered";
+  save();
+  return { action: "new_trigger", alert_id: alertId };
+}
+
+/**
+ * Confirm a trigger after Claude's semantic check determined it's a new event
+ * (or a material update to an existing event).
+ */
+export function confirmAlertTrigger(
+  token: string,
+  alertId: string,
+  eventSignature: EventSignature,
+  sourceUrl: string,
+  isUpdate: boolean,
+): void {
+  const found = findAlertById(token, alertId);
+  if (!found) return;
+  const { alert, save } = found;
+  if (!alert.trigger_history) alert.trigger_history = [];
+  const now = new Date().toISOString();
+  alert.trigger_history.push({
+    triggered_at: now,
+    event_signature: eventSignature,
+    source_urls: [sourceUrl],
+    is_update: isUpdate || undefined,
+  });
+  alert.triggered_count += 1;
+  alert.last_triggered_at = now;
+  if (alert.status === "active") alert.status = "triggered";
+  save();
+}
+
+/**
+ * Append a source URL to an existing trigger_history entry (duplicate event, different article).
+ */
+export function appendDuplicateSource(
+  token: string,
+  alertId: string,
+  eventDate: string,
+  eventSummary: string,
+  sourceUrl: string,
+): void {
+  const found = findAlertById(token, alertId);
+  if (!found) return;
+  const { alert, save } = found;
+  if (!alert.trigger_history) return;
+  // Find the matching entry by date proximity and pick the closest summary match
+  const entry = alert.trigger_history.find(
+    (e) => dateDiffDays(e.event_signature.event_date, eventDate) <= 3,
+  );
+  if (entry && !entry.source_urls.includes(sourceUrl)) {
+    entry.source_urls.push(sourceUrl);
+    save();
   }
 }
 
@@ -836,6 +957,7 @@ export function setGlobalAlerts(
       status: "active",
       triggered_count: 0,
       last_triggered_at: null,
+      trigger_history: [],
       scope: input.scope ?? { markets: [], sectors: [], tickers: [] },
     };
     existing.push(alert);

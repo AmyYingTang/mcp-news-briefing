@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Personalized news briefing + stock watchlist — curated news from RSS, Reddit, and Hacker News based on your interests, plus per-stock sentiment analysis (bullish/bearish) with customizable focus areas. Supports US and ASX markets.",
   "author": {
     "name": "Amy"
@@ -131,7 +131,7 @@
     },
     {
       "name": "briefing_stock_alert_trigger",
-      "description": "Record alert triggers during stock digest analysis"
+      "description": "Record alert triggers with event-level dedup during stock digest analysis"
     }
   ],
   "prompts": [

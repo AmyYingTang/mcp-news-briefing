@@ -1,6 +1,6 @@
 {
   "name": "mcp-news-briefing",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "AI Briefing - Personalized news & stock watchlist via MCP",
   "type": "module",
   "main": "dist/server.js",

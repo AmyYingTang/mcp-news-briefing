@@ -23,6 +23,7 @@ import { log } from "./storage.js";
 import {
   getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, updateCustomSources,
   setAlerts, listAlerts, updateAlert, dismissAlerts, expireStaleAlerts, recordAlertTrigger,
+  confirmAlertTrigger, appendDuplicateSource,
   getActiveAlertsForTicker, getExpiringAlerts, getNoisyAlerts, setGlobalAlerts,
   FOCUS_CATALOG, type Market, type CustomSource, type AlertInput, type GlobalAlertInput, type AlertScope,
 } from "./watchlist.js";
@@ -820,7 +821,15 @@ server.tool(
   "   - 对每条新闻，检查是否命中任一 alert 的 keywords\n" +
   "   - 命中时根据 alert 的 sensitivity 判断相关性：\n" +
   "     loose = 可能相关即触发 / normal = 直接相关才触发 / strict = 确定性进展才触发\n" +
+  "   - 判断为相关后，触发前先做事件去重：\n" +
+  "     · 提取新闻中的事件日期（事件本身发生的日期，非新闻发布日期）和事件摘要\n" +
+  "     · 调用 briefing_stock_alert_trigger 检查是否重复\n" +
+  "     · 如果返回 near_date_found + near_entries，比对新闻内容与已有 event_signature：\n" +
+  "       - 语义相同 → 调用 action='append_duplicate' 追加来源，不重复触发预警\n" +
+  "       - 有实质性进展 → 调用 action='confirm', is_update=true，触发并标注为事件更新\n" +
+  "       - 不同事件 → 调用 action='confirm', is_update=false，正常触发\n" +
   "   - 触发的新闻用 ⚠️ 标注并附上 alert 描述\n" +
+  "   - 事件更新用 ⚠️🔄 标注，附上\"此前已有相关预警，本次为事件进展\"\n" +
   "   - 触发后立即 web search 深度查证，侧重\"这个风险有多大、是否需要关注\"\n" +
   "   - 通用预警触发用 🌐⚠️ 标注\n" +
   "6. 呈现顺序：预警触发和利空消息优先排列，利好消息正常列出但不渲染成\"机会\"\n" +
@@ -995,12 +1004,8 @@ server.tool(
 
     recordSnapshot(realToken!, upperTicker, snapshot);
 
-    // Record each alert trigger in the watchlist
-    if (alert_triggers) {
-      for (const trigger of alert_triggers) {
-        recordAlertTrigger(realToken!, trigger.alert_id);
-      }
-    }
+    // Note: alert triggers are now recorded via briefing_stock_alert_trigger (with dedup).
+    // No need to duplicate that here — history_record only stores the snapshot.
 
     return {
       content: [{
@@ -1291,29 +1296,74 @@ server.tool(
 
 server.tool(
   "briefing_stock_alert_trigger",
-  "记录预警触发。在 briefing_stock_digest 分析过程中发现新闻命中 alert 时调用。\n" +
-  "会更新预警的 triggered_count 和 last_triggered_at。\n\n" +
+  "记录预警触发 + 事件级去重。在 briefing_stock_digest 分析过程中发现新闻命中 alert 时调用。\n\n" +
+  "流程：\n" +
+  "1. 从新闻中提取事件日期（event_date，事件本身发生的日期，非新闻发布日期）和事件摘要（summary）\n" +
+  "2. 调用此工具，server 会检查 trigger_history 中是否有日期相近（±3天）的已触发记录\n" +
+  "3. 如果返回 near_date_found + near_entries：\n" +
+  "   - 比对新闻内容与已有 event_signature\n" +
+  "   - 语义相同（同一事件重复报道）→ 再次调用此工具，action='append_duplicate'\n" +
+  "   - 有实质性进展（传闻→官方确认等）→ 再次调用此工具，action='confirm'，is_update=true\n" +
+  "   - 不同事件 → 再次调用此工具，action='confirm'，is_update=false\n" +
+  "4. 如果返回 new_trigger → 已自动记录，无需额外操作\n\n" +
   "触发通知的语气：\n" +
   "- 说\"你设定的预警条件匹配到了以下新闻\"，不说\"你担心的事情出现了新进展\"\n" +
-  "- 说\"以下是相关来源的信息\"，不说\"经查证，该消息基本属实\"",
+  "- 说\"以下是相关来源的信息\"，不说\"经查证，该消息基本属实\"\n" +
+  "- 事件更新用 ⚠️🔄 标注，附上\"此前已有相关预警，本次为事件进展\"",
   {
     token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     alert_ids: z.array(z.string()).describe("被触发的预警ID列表"),
+    event_signature: z.object({
+      event_date: z.string().describe("事件本身的日期，ISO 格式（如 \"2026-03-25\"）"),
+      summary: z.string().describe("一句话事件摘要"),
+    }).optional().describe("事件签名，用于去重。首次调用时必填。"),
+    source_url: z.string().default("").describe("触发来源文章 URL"),
+    is_update: z.boolean().default(false).describe("是否为已有事件的实质性进展（默认 false）"),
+    action: z.enum(["check", "confirm", "append_duplicate"]).default("check")
+      .describe("check=首次检查去重（默认），confirm=Claude确认为新事件后写入，append_duplicate=追加重复来源"),
   },
-  async ({ token, alert_ids }) => {
+  async ({ token, alert_ids, event_signature, source_url, is_update, action }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
 
+    const results: unknown[] = [];
+
     for (const id of alert_ids) {
-      recordAlertTrigger(realToken!, id);
+      if (action === "append_duplicate") {
+        if (event_signature) {
+          appendDuplicateSource(realToken!, id, event_signature.event_date, event_signature.summary, source_url);
+          results.push({ alert_id: id, action: "duplicate_appended" });
+        }
+      } else if (action === "confirm") {
+        if (event_signature) {
+          confirmAlertTrigger(realToken!, id, event_signature, source_url, is_update);
+          results.push({ alert_id: id, action: "confirmed", is_update });
+        }
+      } else {
+        // action === "check" (default)
+        if (event_signature) {
+          const result = recordAlertTrigger(realToken!, id, event_signature, source_url, is_update);
+          results.push(result);
+        } else {
+          // Backwards compat: no event_signature → legacy simple trigger
+          const result = recordAlertTrigger(
+            realToken!, id,
+            { event_date: new Date().toISOString().slice(0, 10), summary: "（未提供事件签名）" },
+            source_url,
+            false,
+          );
+          results.push(result);
+        }
+      }
     }
+
     return {
       content: [{
         type: "text" as const,
         text: JSON.stringify({
           status: "success",
-          triggered: alert_ids,
-          message: `已记录 ${alert_ids.length} 条预警触发。`,
+          results,
+          message: `已处理 ${alert_ids.length} 条预警。`,
         }),
       }],
     };
