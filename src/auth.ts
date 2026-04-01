@@ -131,6 +131,13 @@ export function getDefaultName(): string | null {
 /**
  * Set a token as the default identity.
  */
+/**
+ * Return all registered token strings.
+ */
+export function getAllTokens(): string[] {
+  return Object.keys(loadTokens());
+}
+
 export function setDefault(tokenOrName: string): { success: boolean; name: string; error?: string } {
   const resolved = resolveToken(tokenOrName);
   if (!resolved) {

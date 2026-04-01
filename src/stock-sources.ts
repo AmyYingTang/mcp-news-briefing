@@ -9,9 +9,9 @@
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, statSync } from "node:fs";
 import RssParser from "rss-parser";
-import { CACHE_DIR, DATA_DIR, readJSON, writeJSON, cleanupOldCache, log } from "./storage.js";
+import { CACHE_DIR, DATA_DIR, getUserDataDir, readJSON, writeJSON, cleanupOldCache, log } from "./storage.js";
 import { getWatchlist, resolveSourceUrls, STOCK_SOURCE_CATALOG, SHARED_SOURCES, type WatchlistEntry } from "./watchlist.js";
 import type { Article } from "./sources.js";
 
@@ -535,10 +535,13 @@ export async function fetchStockNews(
     articles: unique,
   };
 
-  // Write cache
+  // Write sliding-window cache
   writeJSON(cachePath, fetchResult);
   log(`💾 Stock cached: ${key} (${unique.length} articles)`);
   cleanupOldCache();
+
+  // Also save to date-based daily cache for historical retention
+  saveDailyStockCache(token, unique);
 
   return fetchResult;
 }
@@ -601,4 +604,108 @@ function countByTicker(articles: Article[]): Record<string, number> {
     counts[ticker] = (counts[ticker] || 0) + 1;
   }
   return counts;
+}
+
+// ── Daily stock cache (date-based retention) ───────────────
+
+const DAILY_CACHE_MAX_DAYS = 14;
+
+function dailyCacheDir(token: string, ticker: string): string {
+  const dir = join(getUserDataDir(token), "stock-cache", ticker.toUpperCase());
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Save fetched articles into per-ticker date files.
+ * Called after fetchStockNews() completes.
+ */
+export function saveDailyStockCache(token: string, articles: Article[]): void {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // Group articles by ticker
+  const byTicker: Record<string, Article[]> = {};
+  for (const a of articles) {
+    const match = a.source.match(/^stock-\w+:([^:]+)/);
+    const ticker = match?.[1]?.toUpperCase() || "UNKNOWN";
+    if (!byTicker[ticker]) byTicker[ticker] = [];
+    byTicker[ticker].push(a);
+  }
+
+  for (const [ticker, tickerArticles] of Object.entries(byTicker)) {
+    const dir = dailyCacheDir(token, ticker);
+    const filePath = join(dir, `${today}.json`);
+    writeJSON(filePath, tickerArticles);
+    log(`💾 Daily cache: ${ticker}/${today} (${tickerArticles.length} articles)`);
+  }
+
+  // Cleanup old daily cache files
+  cleanupOldDailyCache(token);
+}
+
+/**
+ * Load articles from the daily date-based cache.
+ * If ticker is specified, loads only that ticker's file.
+ * If date is not specified, defaults to today.
+ */
+export function loadDailyStockCache(
+  token: string,
+  ticker?: string,
+  date?: string,
+): Article[] {
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+  const wl = getWatchlist(token);
+
+  const tickers = ticker
+    ? [ticker.toUpperCase()]
+    : Object.keys(wl).map((t) => t.toUpperCase());
+
+  const allArticles: Article[] = [];
+  for (const t of tickers) {
+    const dir = join(getUserDataDir(token), "stock-cache", t);
+    const filePath = join(dir, `${targetDate}.json`);
+    if (existsSync(filePath)) {
+      const articles = readJSON<Article[]>(filePath, []);
+      allArticles.push(...articles);
+    }
+  }
+
+  return allArticles;
+}
+
+/**
+ * Check if daily cache exists for a specific ticker and date.
+ */
+export function hasDailyStockCache(token: string, ticker: string, date: string): boolean {
+  const dir = join(getUserDataDir(token), "stock-cache", ticker.toUpperCase());
+  return existsSync(join(dir, `${date}.json`));
+}
+
+/**
+ * Remove daily cache files older than maxDays.
+ */
+export function cleanupOldDailyCache(token: string, maxDays = DAILY_CACHE_MAX_DAYS): void {
+  const cutoff = Date.now() - maxDays * 24 * 3600 * 1000;
+  const cacheRoot = join(getUserDataDir(token), "stock-cache");
+  if (!existsSync(cacheRoot)) return;
+
+  try {
+    for (const tickerDir of readdirSync(cacheRoot)) {
+      const tickerPath = join(cacheRoot, tickerDir);
+      if (!statSync(tickerPath).isDirectory()) continue;
+      for (const file of readdirSync(tickerPath)) {
+        if (!file.endsWith(".json")) continue;
+        const filePath = join(tickerPath, file);
+        try {
+          // Parse date from filename (YYYY-MM-DD.json)
+          const dateStr = file.replace(".json", "");
+          const fileDate = new Date(dateStr + "T00:00:00Z").getTime();
+          if (fileDate < cutoff) {
+            unlinkSync(filePath);
+            log(`🗑️  Cleaned old daily cache: ${tickerDir}/${file}`);
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    }
+  } catch { /* ignore */ }
 }

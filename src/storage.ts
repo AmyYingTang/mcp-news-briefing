@@ -78,6 +78,26 @@ export function cleanupOldCache(maxAgeHours = 48): void {
   }
 }
 
+// ── User settings ───────────────────────────────────────────
+
+export interface UserSettings {
+  auto_fetch_enabled?: boolean;
+  last_stock_fetch?: string; // YYYY-MM-DD — date of last auto-fetch
+}
+
+export function getUserSettings(token: string): UserSettings {
+  const dir = getUserDataDir(token);
+  return readJSON<UserSettings>(join(dir, "settings.json"), {});
+}
+
+export function setUserSettings(token: string, patch: Partial<UserSettings>): UserSettings {
+  const current = getUserSettings(token);
+  const updated = { ...current, ...patch };
+  const dir = getUserDataDir(token);
+  writeJSON(join(dir, "settings.json"), updated);
+  return updated;
+}
+
 // ── Logging (stderr to avoid MCP stdout corruption) ──────────
 
 export function log(msg: string): void {

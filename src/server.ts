@@ -14,12 +14,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { registerUser, resolveToken, verifyToken, setDefault, getDefaultName } from "./auth.js";
+import { registerUser, resolveToken, verifyToken, setDefault, getDefaultName, getAllTokens } from "./auth.js";
 import { getProfile, setProfile, getProfilePrompt, PROFILE_QUESTIONNAIRE, suggestSources } from "./profile.js";
 import { getSources, setSourcesFromCategories, addCustomSources } from "./user-sources.js";
 import { fetchAll, loadTodayArticles, loadArticlesByDate, type Article } from "./sources.js";
 import { logInteraction, getInteractionSummary, getFullLog } from "./interaction-log.js";
-import { log } from "./storage.js";
+import { log, getUserSettings, setUserSettings } from "./storage.js";
 import {
   getWatchlist, setWatchlistEntry, removeWatchlistEntry, updateFocus, updateCustomSources,
   setAlerts, listAlerts, updateAlert, dismissAlerts, expireStaleAlerts, recordAlertTrigger,
@@ -27,7 +27,7 @@ import {
   getActiveAlertsForTicker, getExpiringAlerts, getNoisyAlerts, setGlobalAlerts,
   FOCUS_CATALOG, type Market, type CustomSource, type AlertInput, type GlobalAlertInput, type AlertScope,
 } from "./watchlist.js";
-import { fetchStockNews, loadStockArticles } from "./stock-sources.js";
+import { fetchStockNews, loadStockArticles, loadDailyStockCache, hasDailyStockCache } from "./stock-sources.js";
 import {
   recordSnapshot, getSnapshots, fetchClosePrice, detectDivergence,
   computeSentimentLabel, type SentimentBreakdown, type SentimentSnapshot, type AlertTriggerRecord,
@@ -750,6 +750,41 @@ server.tool(
   }
 );
 
+// ── Tool: Stock Auto Fetch ──────────────────────────────────
+
+server.tool(
+  "briefing_stock_auto_fetch",
+  "开启或关闭每日自动抓取股票新闻。用户说「帮我开启自动抓取」「关闭自动更新」" +
+  "「每天自动帮我更新股票消息」等时调用。\n\n" +
+  "当用户首次通过 briefing_stock_watchlist_set 添加股票时，" +
+  "应主动问用户是否要开启每日自动抓取，解释其作用（保证趋势数据连续性），并尊重用户的选择。",
+  {
+    token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
+    enabled: z.boolean().describe("true=开启，false=关闭"),
+  },
+  async ({ token, enabled }) => {
+    const { error, realToken } = requireToken(token);
+    if (error) return { content: [{ type: "text" as const, text: error }] };
+
+    setUserSettings(realToken!, { auto_fetch_enabled: enabled });
+
+    const message = enabled
+      ? "✅ 已开启每日自动抓取。每次打开 Claude Desktop 时会自动更新你的股票新闻，你不需要手动触发抓取。看趋势时数据会更完整。"
+      : "已关闭每日自动抓取。后续需要手动说「看看我的股票」才会触发抓取。";
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "success",
+          auto_fetch_enabled: enabled,
+          message,
+        }),
+      }],
+    };
+  }
+);
+
 // ── Tool: Stock Fetch ────────────────────────────────────────
 
 server.tool(
@@ -853,15 +888,35 @@ server.tool(
     token: z.string().default("").describe("用户token或用户名。留空则自动使用默认身份。"),
     ticker: z.string().optional().describe("只看某只股票（可选，不填则返回全部）"),
     limit: z.number().int().min(1).max(100).default(30).describe("返回条数（默认30）"),
+    date: z.string().optional().describe("日期（YYYY-MM-DD），不填则默认今天。用于回溯分析历史日期的已缓存数据。"),
   },
-  async ({ token, ticker, limit }) => {
+  async ({ token, ticker, limit, date }) => {
     const { error, realToken } = requireToken(token);
     if (error) return { content: [{ type: "text" as const, text: error }] };
 
     // Expire stale alerts before processing
     expireStaleAlerts(realToken!);
 
-    const { articles, focus } = loadStockArticles(realToken!, ticker);
+    const today = new Date().toISOString().slice(0, 10);
+    const targetDate = date || today;
+    const isToday = targetDate === today;
+
+    // For today: use sliding-window cache (existing behavior)
+    // For historical dates: use daily date-based cache
+    let articles: Article[];
+    let focus: string[] | undefined;
+
+    if (isToday) {
+      const loaded = loadStockArticles(realToken!, ticker);
+      articles = loaded.articles;
+      focus = loaded.focus;
+    } else {
+      articles = loadDailyStockCache(realToken!, ticker, targetDate);
+      if (ticker) {
+        const wl = getWatchlist(realToken!);
+        focus = wl[ticker.toUpperCase()]?.focus;
+      }
+    }
 
     if (articles.length === 0) {
       return {
@@ -869,9 +924,12 @@ server.tool(
           type: "text" as const,
           text: JSON.stringify({
             status: "empty",
-            message: ticker
-              ? `没有找到 ${ticker} 的缓存新闻。请先调用 briefing_stock_fetch 抓取。`
-              : "没有找到缓存的股票新闻。请先调用 briefing_stock_fetch 抓取。",
+            date: targetDate,
+            message: isToday
+              ? (ticker
+                ? `没有找到 ${ticker} 的缓存新闻。请先调用 briefing_stock_fetch 抓取。`
+                : "没有找到缓存的股票新闻。请先调用 briefing_stock_fetch 抓取。")
+              : `${targetDate} 没有找到缓存的新闻数据。`,
           }),
         }],
       };
@@ -922,6 +980,7 @@ server.tool(
         text: JSON.stringify({
           status: "success",
           ticker: ticker || "all",
+          date: targetDate,
           total: articles.length,
           returned: limited.length,
           focus: focus || [],
@@ -1029,6 +1088,12 @@ server.tool(
   "briefing_stock_history_get",
   "查看某只股票的历史情绪趋势。用户说「AAPL 最近一周情况怎么样」「看看苹果的趋势」等时调用。\n" +
   "返回每日情绪评分 + 收盘价 + 涨跌幅，以及背离检测结果。\n\n" +
+  "返回的 data_status 标记每天的数据状态：\n" +
+  " - complete: 有完整快照，直接使用\n" +
+  " - raw_only: 有原始抓取数据但没有快照。先调用 briefing_stock_digest(date=该日期) 做分析，" +
+  "再调用 briefing_stock_history_record 写入快照，然后继续\n" +
+  " - missing: 什么都没有，标记为数据缺失，在趋势分析中注明\n" +
+  "补全完成后，再做整体的趋势分析和背离检测。\n\n" +
   "趋势呈现的语气约束：\n" +
   "- 背离分析只描述现象，不做预测。说\"新闻情绪与股价走势方向不一致\"，不说\"回调风险在累积\"、\"可能即将反转\"\n" +
   "- 列出可能的解释时用\"可能的原因包括：\"，不用\"这说明...\"、\"这意味着...\"\n" +
@@ -1046,14 +1111,31 @@ server.tool(
     const upperTicker = ticker.toUpperCase();
     const snapshots = getSnapshots(realToken!, upperTicker, days);
 
+    // Build data_status for each day in the requested range
+    const dataStatus: Record<string, "complete" | "raw_only" | "missing"> = {};
+    const now = new Date();
+    for (let i = 0; i < days; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const hasSnapshot = snapshots.some((s) => s.date === dateStr);
+      const hasRawCache = hasDailyStockCache(realToken!, upperTicker, dateStr);
+      dataStatus[dateStr] = hasSnapshot ? "complete" : hasRawCache ? "raw_only" : "missing";
+    }
+
     if (snapshots.length === 0) {
+      // Still return data_status so Claude knows if raw data exists for backfill
+      const hasAnyRaw = Object.values(dataStatus).some((s) => s === "raw_only");
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
             status: "empty",
             ticker: upperTicker,
-            message: `${upperTicker} 还没有历史情绪数据。每次使用 briefing_stock_digest 分析后会自动记录。`,
+            data_status: dataStatus,
+            message: hasAnyRaw
+              ? `${upperTicker} 还没有情绪快照，但有原始抓取数据可以补做分析。请按 data_status 中 raw_only 的日期逐天调用 briefing_stock_digest(date=该日期) 补全。`
+              : `${upperTicker} 还没有历史情绪数据。每次使用 briefing_stock_digest 分析后会自动记录。`,
           }),
         }],
       };
@@ -1069,6 +1151,7 @@ server.tool(
           ticker: upperTicker,
           days_requested: days,
           days_available: snapshots.length,
+          data_status: dataStatus,
           snapshots,
           divergence,
           instructions: divergence.detected
@@ -1438,6 +1521,36 @@ server.prompt("stock-briefing", "只看关注股票的最新动态", async () =>
   ],
 }));
 
+// ── Startup auto-fetch ──────────────────────────────────────
+
+async function runStartupAutoFetch(): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const tokens = getAllTokens();
+
+  for (const token of tokens) {
+    try {
+      const settings = getUserSettings(token);
+      if (!settings.auto_fetch_enabled) continue;
+
+      const wl = getWatchlist(token);
+      if (Object.keys(wl).length === 0) continue;
+
+      // Idempotent: skip if already fetched today
+      if (settings.last_stock_fetch === today) {
+        log(`⏭️  Auto-fetch: already done today for ${token.slice(0, 8)}...`);
+        continue;
+      }
+
+      log(`🤖 Auto-fetch: starting for ${token.slice(0, 8)}... (${Object.keys(wl).length} tickers)`);
+      await fetchStockNews(token, 24);
+      setUserSettings(token, { last_stock_fetch: today });
+      log(`✅ Auto-fetch: completed for ${token.slice(0, 8)}...`);
+    } catch (e) {
+      log(`⚠️  Auto-fetch failed for ${token.slice(0, 8)}...: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+}
+
 // ── Start ────────────────────────────────────────────────────
 
 async function main() {
@@ -1445,6 +1558,11 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log("✅ Server connected via stdio");
+
+  // Run auto-fetch in background (non-blocking, after MCP handshake)
+  runStartupAutoFetch().catch((e) => {
+    log(`⚠️  Auto-fetch error: ${e instanceof Error ? e.message : e}`);
+  });
 }
 
 main().catch((err) => {
