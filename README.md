@@ -168,7 +168,8 @@ mcp-news-briefing/
     ├── user-sources.ts      # 用户信源配置管理
     ├── interaction-log.ts   # 阅读行为追踪
     ├── watchlist.ts         # 股票关注列表 CRUD、侧重面推荐、信源目录
-    └── stock-sources.ts     # 股票新闻抓取（per-ticker RSS / 过滤型信源 / fallback）
+    ├── stock-sources.ts     # 股票新闻抓取（per-ticker RSS / 过滤型信源 / fallback）+ 按日期缓存
+    └── stock-history.ts     # 情绪快照 CRUD、收盘价抓取、背离检测
 ```
 
 ### 架构
@@ -221,10 +222,11 @@ Claude Desktop
 | `briefing_stock_watchlist_remove` | 移除关注股票 |
 | `briefing_stock_watchlist_update_focus` | 调整某只股票的关注侧重面 |
 | `briefing_stock_watchlist_custom_sources` | 管理某只股票的自定义 RSS 信源 |
+| `briefing_stock_auto_fetch` | 开启/关闭每次启动时自动抓取股票新闻 |
 | `briefing_stock_fetch` | 抓取关注股票的最新新闻 |
-| `briefing_stock_digest` | 获取股票新闻列表，供 AI 做利好/利空分析 |
+| `briefing_stock_digest` | 获取股票新闻列表，供 AI 做利好/利空分析（支持历史日期回溯） |
 | `briefing_stock_history_record` | 记录每日情绪快照（分析后自动调用） |
-| `briefing_stock_history_get` | 查看历史情绪趋势 + 股价走势 + 背离检测 |
+| `briefing_stock_history_get` | 查看历史情绪趋势 + 股价走势 + 背离检测（含逐日数据状态） |
 | `briefing_stock_alert_set` | 批量创建预警（从分析师报告提取或手动） |
 | `briefing_stock_alert_list` | 查看预警列表 + 触发统计 |
 | `briefing_stock_alert_update` | 修改预警松紧度、时间窗口、关键词 |
@@ -256,6 +258,8 @@ Claude Desktop
 - [x] 股票历史情绪趋势 + 股价对比 + 背离检测
 - [x] 股票预警（Alert）— 分析师报告提取、时效性监控、通用预警、风险提示优先
 - [x] 预警事件级去重 — 同一事件多天多源报道只触发一次，实质性进展自动识别
+- [x] 启动时自动抓取 — 用户开启后每次打开 Claude Desktop 自动更新股票新闻（幂等，每日一次）
+- [x] 按日期保留抓取缓存（14天）— 支持回溯分析历史某天的新闻
 - [ ] 预警推送通知（pending notification 写入 + 下次交互时呈现）
 - [ ] 偏好自动演进（根据阅读行为调整关注权重）
 

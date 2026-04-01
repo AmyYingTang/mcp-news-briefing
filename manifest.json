@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-news-briefing",
   "display_name": "AI Briefing",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Personalized news briefing + stock watchlist — curated news from RSS, Reddit, and Hacker News based on your interests, plus per-stock sentiment analysis (bullish/bearish) with customizable focus areas. Supports US and ASX markets.",
   "author": {
     "name": "Amy"
@@ -96,6 +96,10 @@
     {
       "name": "briefing_stock_watchlist_custom_sources",
       "description": "Add or remove custom RSS feeds for a specific stock"
+    },
+    {
+      "name": "briefing_stock_auto_fetch",
+      "description": "Enable or disable daily automatic stock news fetching on server startup"
     },
     {
       "name": "briefing_stock_fetch",
